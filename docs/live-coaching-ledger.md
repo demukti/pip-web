@@ -11,8 +11,9 @@ This is the historical record; the live coaching doc describes the code as it st
   `cd6ae72`. D-3 is done: `live-probe` and its test are removed from the repo; the
   deployed probe Worker and its ChatGPT plugin were deleted by the owner.
 - After that deploy: `cc2e06b` (the tool description explains showdown cards) and
-  Batch E below. Neither is known to be deployed. Going live needs a Worker deploy,
-  a Pages deploy of the game, and a tool-metadata refresh in ChatGPT.
+  Batch E below. Both went live on 2026-11-15 with the push of `624c521` to `main`
+  (the hosted game's build stamp read `pip-624c521`); the owner refreshed the tool
+  metadata in ChatGPT and reports that it reads the new fields.
 - Still open: D-1, the manual checks listed under Verification in the live coaching
   doc.
 
@@ -94,7 +95,7 @@ so do not expect a felt difference from them.
 ## Work ledger
 
 Ordered so that each batch is one deploy and one retest. Batches A–C are done and
-deployed at `cd6ae72`; Batch E is done in the repo, not deployed.
+deployed at `cd6ae72`; Batch E is done and deployed at `624c521`.
 
 ### Batch A — game client only
 
@@ -133,10 +134,11 @@ deployed at `cd6ae72`; Batch E is done in the repo, not deployed.
 | D-2 | Done: `live-coaching.md` describes the current schema, lifetimes, status and verification. |
 | D-3 | Done 2026-11-15: private iPhone Live verified by the owner; `live-probe` removed from the repo. |
 
-### Batch E — table context, sliding sessions, honest badge (not deployed)
+### Batch E — table context, sliding sessions, honest badge (deployed 2026-11-15)
 
-Needs a Worker deploy (E1, E3, E6), a Pages deploy (E1, E2, E4, E5) and a
-tool-metadata refresh in ChatGPT (E3). This batch's tests carry no ID prefix (the
+Needed a Worker deploy (E1, E3, E6), a Pages deploy (E1, E2, E4, E5) and a
+tool-metadata refresh in ChatGPT (E3); all three were done on 2026-11-15 at
+`624c521`. This batch's tests carry no ID prefix (the
 `A1:`…`C3:` prefixes in `livePublisher.test.ts` are the earlier batches' ledger
 IDs); the Tests column names them by title.
 

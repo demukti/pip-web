@@ -1,15 +1,17 @@
 # Pip Live coaching
 
-Status (2026-11-15): the private service and the game were deployed by hand on
-2026-11-15 from the commit now on `main` as `cd6ae72`. By the owner's report, that
-deployment is readable from an OAuth-protected text chat and from iPhone Live in the
-owner's ChatGPT workspace. Everything after `cd6ae72` is **not known to be
-deployed**: `cc2e06b` (the tool description explains showdown cards) and the batch
-recorded as Batch E in [live-coaching-ledger.md](./live-coaching-ledger.md) (table
-context, sliding sessions, badge states, logs). Taking them live needs all three of:
-a Worker deploy, a Pages deploy of the game, and a tool-metadata refresh of Pip Live
-in ChatGPT (the tool description changed). Automatic deploys stay off until
-`PIP_TUTOR_ENABLED` is set.
+Status (2026-11-15): the private service and the game are live with the code as of
+`624c521`, which includes `cc2e06b` (the tool description explains showdown cards)
+and the batch recorded as Batch E in
+[live-coaching-ledger.md](./live-coaching-ledger.md) (table context, sliding
+sessions, badge states, logs). The push to `main` deployed it: the hosted game's
+build stamp read `pip-624c521`, and the workflow deploys the Worker before the game.
+By the owner's report, after reloading the game and refreshing Pip Live's tool
+metadata, ChatGPT reads the new fields; the earlier deployment (`cd6ae72`, by hand)
+was already readable from an OAuth-protected text chat and from iPhone Live in the
+owner's ChatGPT workspace. Any later change to the tool description needs that
+metadata refresh again. Deploys run on pushes to `main` while `PIP_TUTOR_ENABLED`
+is `true`.
 
 No automated poker decisions or model API calls were added. The poker rules are
 unchanged; the engine gained one pure helper, `showsHoleCards`.
@@ -305,6 +307,12 @@ at a tournament, `status` `playing` or `watching` is published as `watching`, an
 again (a new table). After each spectated hand the snapshot says `busted` with
 that same place, matching the end card the table shows again.
 
+A fix for the store itself was proposed upstream on 2026-11-15 (branch
+`fix/spectate-records-once`, a pull request against `playpip/pip-web`): the deal
+keeps a spectated table `watching` and a watched hand no longer settles the run
+again. Once that is merged and pulled into this fork, the store reports `watching`
+and the original place by itself, and this workaround can be reduced.
+
 Equity is the exact existing Monte Carlo estimate from the game store, computed
 on the hero's turn. The publisher does not run a second simulation. During AI
 turns, at completion or when no valid estimate exists, `equity` is null and
@@ -381,8 +389,8 @@ a merge, still play a hand with sharing on.
 | --- | --- |
 | Automated, `ava tests/live*.test.ts` | 90 pass (2026-11-15): snapshot privacy and fields including this batch's (`liveCoachingState`, 26), publisher against a fake service (`livePublisher`, 30), hook guard (`liveCoachingHooks`, 8), the table context against the real game and profile stores with a real game played in Node, including the run-status re-publish and spectating (`liveCoachingTable`, 4), and the real Worker, Durable Object and OAuth library with in-memory bindings, driven by the real engine and the real publisher (`liveStateService`, 22), including sliding expiry end to end |
 | Automated, full suite | Run by `pnpm test:all`, the gate before every push |
-| By hand, owner report 2026-11-15 | On the `cd6ae72` deployment: `Live · version N` in the real game; private OAuth text chat and iPhone Live retrieval both work. Tool versions and timestamps not recorded |
-| Unverified | Everything after `cd6ae72` in a real browser: the badge states, the Settings copy and Dismiss button, the new fields and run-over `brief` as ChatGPT reads them. Also, from before: second-device retrieval, displayed-equity comparison against the odds panel, stale reporting after closing the tab |
+| By hand, owner report 2026-11-15 | On the `cd6ae72` deployment: `Live · version N` in the real game; private OAuth text chat and iPhone Live retrieval both work. On the `624c521` deployment: ChatGPT reads the new fields (hand name, opponents' style and reads, table). Tool versions and timestamps not recorded |
+| Unverified | In a real browser: each badge state, the Settings copy and Dismiss button, and the run-over `brief` as ChatGPT reads it. Also, from before: second-device retrieval, displayed-equity comparison against the odds panel, stale reporting after closing the tab |
 
 For the deployed demonstration: connect the real game, fetch its initial state,
 make a move, fetch again, and repeat at least four times through an unfinished
