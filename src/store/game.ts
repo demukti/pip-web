@@ -51,6 +51,7 @@ import {
   legalActions,
   isHandComplete,
   potSize,
+  showsHoleCards,
   type Action,
   type HandState,
   type SeatConfig,
@@ -1747,13 +1748,8 @@ function buildHandRecord(
     seats: SeatMeta[]
   },
 ): HandRecord {
-  const showdown = hand.result?.showdown === true
   const reveals = hand.players
-    .filter(
-      (p) =>
-        p.hole.length >= 2 &&
-        (p.id === HUMAN_ID || (showdown && p.status !== 'folded' && p.status !== 'out')),
-    )
+    .filter((p) => showsHoleCards(hand, p) || (p.id === HUMAN_ID && p.hole.length >= 2))
     .map((p) => ({
       playerId: p.id,
       playerName: p.name,

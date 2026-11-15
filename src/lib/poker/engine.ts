@@ -758,3 +758,19 @@ export function presetRaiseTo(state: HandState, legal: LegalActions, fraction: n
 }
 
 export const isHandComplete = (state: HandState): boolean => state.street === 'complete'
+
+/**
+ * Whether a finished hand turned this player's hole cards face up: the hand
+ * ended at a real showdown and the player was still in it (live or all in).
+ *
+ * The one rule the felt, the hand record and the live-coaching snapshot share,
+ * so what is shown cannot drift between them. Never a folded hand, never a
+ * seat that was not dealt in, nothing when the pot went without a showdown,
+ * and nothing while the hand is in play (`result` is null until it ends). A
+ * Mystery Card that never turned over leaves a hand at one card: not shown.
+ */
+export const showsHoleCards = (state: HandState, player: Player): boolean =>
+  state.result?.showdown === true &&
+  player.status !== 'folded' &&
+  player.status !== 'out' &&
+  player.hole.length >= 2

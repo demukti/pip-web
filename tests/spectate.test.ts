@@ -102,7 +102,12 @@ test('the table is handed its membership and never looks it up', (t) => {
 test('cards go face up for a spectator and for a showdown, and nothing else', (t) => {
   const source = code(TABLE)
   t.regex(source, /const spectating = status === 'watching'/)
-  t.regex(source, /const revealAll = showdownReveal \|\| spectating/)
+  // The showdown half is the engine's `showsHoleCards` (live hands at a real
+  // showdown only), the same rule the live-coaching snapshot reveals by.
+  t.regex(
+    source,
+    /const revealAll = \(p: Player\) =>\s*showsHoleCards\(hand, p\) \|\|\s*\(spectating && p\.status !== 'folded' && p\.status !== 'out'\)/,
+  )
   // Every seat's reveal reads the combined flag, so there is one rule rather
   // than one per render site. Since the table was drawn as a table (2026-10-07)
   // phone and desktop seat their opponents through the same site; at least one

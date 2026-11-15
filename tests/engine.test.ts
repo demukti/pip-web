@@ -4,6 +4,7 @@ import {
   applyAction,
   legalActions,
   isHandComplete,
+  showsHoleCards,
   type HandState,
   type SeatConfig,
 } from '@/lib/poker/engine'
@@ -161,4 +162,29 @@ test('BB all-in short: SB still acts, and his uncalled excess is returned', (t) 
   // P0's aces win the 6-chip main pot; his unmatched 7 chips come back: 100 + 3.
   t.is(byId(s, 'P0').stack, 103)
   t.is(byId(s, 'P1').stack, 0)
+})
+
+test('showsHoleCards: only players still in the hand, only at a real showdown', (t) => {
+  const three: SeatConfig[] = [
+    { id: 'A', name: 'A', stack: 200 },
+    { id: 'B', name: 'B', stack: 200 },
+    { id: 'C', name: 'C', stack: 200 },
+  ]
+  // A calls, B folds, C checks it down to a showdown.
+  let s = startHand({ seats: three, buttonIndex: 0, smallBlind: 5, bigBlind: 10 })
+  s = applyAction(applyAction(s, { type: 'call' }), { type: 'fold' })
+  while (!isHandComplete(s)) {
+    for (const p of s.players) t.false(showsHoleCards(s, p), 'nothing while in play')
+    s = applyAction(s, { type: 'check' })
+  }
+  t.true(s.result!.showdown)
+  t.deepEqual(
+    s.players.map((p) => showsHoleCards(s, p)),
+    [true, false, true],
+  )
+  // Won without a showdown: nobody's cards are shown.
+  let quiet = startHand({ seats: three, buttonIndex: 0, smallBlind: 5, bigBlind: 10 })
+  while (!isHandComplete(quiet)) quiet = applyAction(quiet, { type: 'fold' })
+  t.false(quiet.result!.showdown)
+  t.true(quiet.players.every((p) => !showsHoleCards(quiet, p)))
 })

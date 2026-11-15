@@ -1,7 +1,13 @@
 import test from 'ava'
 import { liveSnapshot } from '@/lib/liveCoaching/state'
 import { mulberry32, cardToString } from '@/lib/poker/cards'
-import { startHand, applyAction, legalActions, isHandComplete } from '@/lib/poker/engine'
+import {
+  startHand,
+  applyAction,
+  legalActions,
+  isHandComplete,
+  type HandState,
+} from '@/lib/poker/engine'
 
 const context = {
   sessionId: 'test-private-session',
@@ -10,8 +16,9 @@ const context = {
   handNo: 1,
   heroId: 'hero',
 }
-const deal = () =>
+const deal = (opts: { mystery?: boolean } = {}) =>
   startHand({
+    ...opts,
     seats: [
       { id: 'hero', name: 'Hero', stack: 200 },
       { id: 'ai1', name: 'One', stack: 150 },
@@ -53,6 +60,120 @@ test('projection never exposes deck, opponent cards or unknown engine extensions
     for (const card of player.hole) t.false(encoded.includes(JSON.stringify(cardToString(card))))
   }
   for (const card of hand.deck) t.false(encoded.includes(JSON.stringify(cardToString(card))))
+})
+
+/** Play to the end, checking or calling, through `fold` for any player listed. */
+const playOut = (hand: HandState, folds: string[] = [], each?: (hand: HandState) => void) => {
+  while (!isHandComplete(hand)) {
+    each?.(hand)
+    const actor = hand.players[hand.toActIndex].id
+    const legal = legalActions(hand)!
+    hand = applyAction(hand, {
+      type: folds.includes(actor) ? 'fold' : legal.canCheck ? 'check' : 'call',
+    })
+  }
+  return hand
+}
+/** Every card a player holds or will hold, the face-down Mystery Card included. */
+const cardsOf = (player: HandState['players'][number]) =>
+  [...player.hole, ...(player.mystery ? [player.mystery] : [])].map(cardToString)
+const mentions = (encoded: string, card: string) => new RegExp(`\\b${card}\\b`).test(encoded)
+
+test('in play, no opponent card or Mystery Card appears anywhere, on any street', (t) => {
+  for (const mystery of [false, true]) {
+    const checked = new Set<string>()
+    playOut(deal({ mystery }), [], (hand) => {
+      const snapshot = liveSnapshot(hand, context)
+      const encoded = JSON.stringify(snapshot)
+      t.is(snapshot.hand!.result, null)
+      for (const player of hand.players) {
+        // The hero sees their own face-up cards; nobody sees a Mystery Card yet.
+        const hidden =
+          player.id === 'hero' ? cardsOf(player).slice(player.hole.length) : cardsOf(player)
+        for (const card of hidden) t.false(mentions(encoded, card), `${player.id} ${card}`)
+      }
+      checked.add(hand.street)
+    })
+    t.deepEqual([...checked], ['preflop', 'flop', 'turn', 'river'])
+  }
+})
+
+test('showdown: the hands the table turned over, in seat order, and only those', (t) => {
+  const hand = playOut(deal())
+  t.true(hand.result!.showdown)
+  const result = liveSnapshot(hand, context).hand!.result!
+  const evaluations = hand.result!.evaluations!
+  t.deepEqual(result.shownHands, [
+    {
+      playerId: 'hero',
+      name: 'Hero',
+      position: 'BTN',
+      holeCards: cardsOf(hand.players[0]),
+      // The table names the hero's own hand under their cards…
+      handName: evaluations.hero.name,
+    },
+    {
+      playerId: 'ai1',
+      name: 'One',
+      position: 'SB',
+      holeCards: cardsOf(hand.players[1]),
+      // …and the winner's in the result line…
+      handName: evaluations.ai1.name,
+    },
+    // …but never a losing opponent's.
+    { playerId: 'ai2', name: 'Two', position: 'BB', holeCards: cardsOf(hand.players[2]) },
+  ])
+  t.deepEqual(result.potsAwarded, [{ amount: 30, winners: ['ai1'] }])
+})
+
+test('showdown: a player who folded on the way is not shown, anywhere', (t) => {
+  // Hero calls on the button, One folds the small blind, Two checks it down.
+  const hand = playOut(deal(), ['ai1'])
+  t.true(hand.result!.showdown)
+  t.is(hand.players[1].status, 'folded')
+  const snapshot = liveSnapshot(hand, context)
+  t.deepEqual(
+    snapshot.hand!.result!.shownHands.map((shown) => shown.playerId),
+    ['hero', 'ai2'],
+  )
+  const encoded = JSON.stringify(snapshot)
+  for (const card of cardsOf(hand.players[1])) t.false(mentions(encoded, card))
+  for (const card of cardsOf(hand.players[2])) t.true(mentions(snapshot.hand!.brief, card))
+})
+
+test('won without a showdown: nothing is shown and no opponent card appears', (t) => {
+  for (const mystery of [false, true]) {
+    // Hero calls, One raises, everyone else folds: One takes it unseen.
+    let hand = applyAction(deal({ mystery }), { type: 'call' })
+    hand = applyAction(hand, { type: 'raise', amount: 40 })
+    hand = playOut(hand, ['hero', 'ai2'])
+    t.false(hand.result!.showdown)
+    const snapshot = liveSnapshot(hand, context)
+    t.deepEqual(snapshot.hand!.result!.shownHands, [])
+    const encoded = JSON.stringify(snapshot)
+    for (const player of hand.players.slice(1))
+      for (const card of cardsOf(player)) t.false(mentions(encoded, card))
+    t.false(snapshot.hand!.brief.includes('showed'))
+  }
+})
+
+test('Mystery Card: the turned-over card is shown at showdown, a folded one never', (t) => {
+  const hand = playOut(deal({ mystery: true }), ['ai1'])
+  t.true(hand.result!.showdown)
+  // The folded hand keeps its Mystery Card face down.
+  t.truthy(hand.players[1].mystery)
+  const snapshot = liveSnapshot(hand, context)
+  const shown = snapshot.hand!.result!.shownHands
+  t.deepEqual(
+    shown.map((s) => [s.playerId, s.holeCards.length]),
+    [
+      ['hero', 2],
+      ['ai2', 2],
+    ],
+  )
+  t.deepEqual(shown[1].holeCards, hand.players[2].hole.map(cardToString))
+  const encoded = JSON.stringify(snapshot)
+  for (const card of cardsOf(hand.players[1])) t.false(mentions(encoded, card))
 })
 
 test('several real moves produce fresh unfinished snapshots without mutating earlier ones', (t) => {
@@ -218,13 +339,12 @@ test('brief: completed hands report the public result only', (t) => {
   }
   const brief = liveSnapshot(shown, context).hand!.brief
   const board = shown.community.map(cardToString).join(' ')
+  const [one, two] = shown.players.slice(1).map((player) => cardsOf(player).join(' '))
+  // At showdown the brief says what the table turned over, and nothing more.
   t.is(
     brief,
-    `Hand 1, complete. You are BTN with ${a} ${b}, 190 behind. Board ${board}. One won 30 at showdown.`,
+    `Hand 1, complete. You are BTN with ${a} ${b}, 190 behind. Board ${board}. One won 30 at showdown. You showed ${a} ${b}, One showed ${one}, Two showed ${two}.`,
   )
-  // Opponents' cards were turned over at showdown, but the brief never names them.
-  for (const player of shown.players.slice(1))
-    for (const card of player.hole) t.false(new RegExp(`\\b${cardToString(card)}\\b`).test(brief))
 })
 
 test('brief: waiting on an AI, nothing to call, absent hero, never currency', (t) => {

@@ -220,7 +220,7 @@ before upload, acknowledged by the server and never accepted out of order.
 | `hero` | Player ID, original-deal position, visible `holeCards`, `equity` (probability 0–1) and `equityDisplay` (Pip's exact rounded text, e.g. `72%`), or null if hero absent |
 | `hero.lastEquity` | `{ equity, equityDisplay, street }`: the most recent hero-turn estimate in this hand and the street it was computed on, or null. A past estimate, not current equity; lost on reload |
 | `hero.stack`, `hero.toCall`, `hero.potOdds` | Chips behind; on the hero's turn the engine's call amount, and `toCall / (pot + toCall)` when there is something to call; otherwise null |
-| `brief` | One plain sentence-style summary built only from the other fields, for a voice answer to lead with. Never contains opponent cards |
+| `brief` | One plain sentence-style summary built only from the other fields, for a voice answer to lead with. Names opponent cards only after a showdown, and only those in `result.shownHands` ("One showed Ah Kd, you showed 9s Tc.") |
 | `communityCards` | Only cards currently on the board; Pip strings such as `Ah`, `Td` |
 | `pot`, `potAwarded` | Total hand contributions from the engine; after completion this is the contested pot already awarded |
 | `players` | IDs/names, original-deal positions, statuses, chips behind and commitments this street/across the hand; no opponent hole cards |
@@ -228,11 +228,15 @@ before upload, acknowledged by the server and never accepted out of order.
 | `currentBet`, `currentPlayerToAct` | Current street price and actor, including AI actors; actor null on completion |
 | `availableActions` | Actor ID and exact engine legal-action flags/sizes; bet/raise sizes are total street commitment, call amount is additional chips, capped at stack |
 | `actionHistory` | Actor (ID, `name`, `position`), street, action type and resulting street commitment in chronological order |
-| `result` | Public showdown flag, payouts and pot winners; no private cards/evaluations |
+| `result` | Null while the hand is in play. Then the public `showdown` flag, `payouts`, `potsAwarded`, and `shownHands`: `{ playerId, name, position, holeCards, handName? }` for each hand the table turned face up, in seat order, the hero's included. A hand is shown only when it ended at a real showdown and the player was still in it, live or all in (engine `showsHoleCards`, the rule the felt draws by). `[]` without a showdown; never a folded hand or an unturned Mystery Card. `handName` (e.g. `Two Pair`) only where the table names it: the hero's own hand and the first pot's winners. No other evaluations |
 
 All amounts are play-money chip units. Heads-up uses `BTN/SB`; folded/all-in
 players keep their original deal positions. The adapter never serializes the
-engine deck, mystery cards, opponent hole cards, or replay/review payload wholesale.
+engine deck, a Mystery Card before the table turns it over, or the replay/review
+payload wholesale. Opponent hole cards appear only in `result.shownHands`, once a
+hand has ended at a showdown, and only for the players the table shows: exactly
+what the player can already see, nothing more. (After busting, "Watch it out" turns
+every live hand face up mid-hand; the snapshot does not follow it.)
 
 Equity is the exact existing Monte Carlo estimate from the game store, computed
 on the hero's turn. The publisher does not run a second simulation. During AI

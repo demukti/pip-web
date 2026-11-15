@@ -1,7 +1,13 @@
 // Explicit, hero-visible projection of the engine. Never serialize HandState
 // directly: it contains the undealt deck and every opponent's private cards.
 import { cardToString } from '@/lib/poker/cards'
-import { isHandComplete, legalActions, potSize, type HandState } from '@/lib/poker/engine'
+import {
+  isHandComplete,
+  legalActions,
+  potSize,
+  showsHoleCards,
+  type HandState,
+} from '@/lib/poker/engine'
 import { formatWinPct } from '@/lib/utils'
 
 export interface LiveSnapshotContext {
@@ -91,6 +97,7 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
           }
         : null
   const pot = potSize(hand)
+  const shownHands = revealedHands(hand, context.heroId, seatPositions)
   // Price to call only on the hero's own turn: the engine's call amount,
   // already capped at the hero's stack.
   const toCall = hero && legal && actor === hero.id ? legal.callAmount : null
@@ -179,8 +186,9 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
         name: hand.players.find((player) => player.id === action.playerId)?.name ?? null,
         position: seatPositions.get(action.playerId) ?? null,
       })),
-      // Public results only. Never include evaluations, which can reveal cards
-      // beyond what was visible, or the review format's all-player hole array.
+      // Public results only: never the evaluations wholesale (the table names
+      // only the hero's and the winning hand), never the review format's
+      // all-player hole array. `shownHands` is what the felt turned face up.
       result: hand.result
         ? {
             showdown: hand.result.showdown,
@@ -189,6 +197,7 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
               amount: pot.amount,
               winners: [...pot.winners],
             })),
+            shownHands,
           }
         : null,
       brief: brief(hand, {
@@ -203,9 +212,48 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
         potOdds,
         equity,
         lastEquity,
+        shownHands,
       }),
     },
   }
+}
+
+type ShownHand = {
+  playerId: string
+  name: string
+  position: string | null
+  holeCards: string[]
+  handName?: string
+}
+
+/**
+ * Exactly the hands the table turned face up when the hand ended, in seat
+ * order: the engine's `showsHoleCards`, the rule the felt itself draws by.
+ * Empty without a showdown and while the hand is in play.
+ *
+ * `handName` only where the table already says it: under the hero's own cards,
+ * and in the result line for the first pot's winners (`describeResult`).
+ */
+function revealedHands(
+  hand: HandState,
+  heroId: string,
+  positions: Map<string, string>,
+): ShownHand[] {
+  const result = hand.result
+  if (!result) return []
+  const named = new Set([heroId, ...(result.potsAwarded[0]?.winners ?? [])])
+  return hand.players
+    .filter((player) => showsHoleCards(hand, player))
+    .map((player) => {
+      const handName = named.has(player.id) ? result.evaluations?.[player.id]?.name : undefined
+      return {
+        playerId: player.id,
+        name: player.name,
+        position: positions.get(player.id) ?? null,
+        holeCards: player.hole.map(cardToString),
+        ...(handName ? { handName } : {}),
+      }
+    })
 }
 
 /**
@@ -227,6 +275,7 @@ function brief(
     potOdds: number | null
     equity: number | null
     lastEquity: { equityDisplay: string; street: string } | null
+    shownHands: ShownHand[]
   },
 ): string {
   const { hero, complete } = facts
@@ -251,6 +300,12 @@ function brief(
       parts.push(
         `${won.join('; ')} ${hand.result?.showdown ? 'at showdown' : 'without a showdown'}.`,
       )
+    // Only what the table turned face up: never a folded or unshown hand.
+    const shown = facts.shownHands.map(
+      (shown, i) =>
+        `${shown.playerId === hero?.id ? (i ? 'you' : 'You') : shown.name} showed ${shown.holeCards.join(' ')}`,
+    )
+    if (shown.length) parts.push(`${shown.join(', ')}.`)
     return parts.join(' ')
   }
   parts.push(`Pot ${facts.pot}.`)

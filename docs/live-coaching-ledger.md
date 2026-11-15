@@ -5,7 +5,8 @@ coaching"), checked 2026-11-15. Companion to [live-coaching-poc.md](./live-coach
 
 **Status (2026-11-15):** Batches A, B and C are implemented on branch
 `feat/live-coaching-ledger`, plus read timing and request logs (see "Diagnosing a
-slow answer" in the POC doc). `pnpm test:all` passes. Not yet deployed. Still open:
+slow answer" in the POC doc), and showdown reveals in the snapshot
+(`result.shownHands`). `pnpm test:all` passes. Not yet deployed. Still open:
 D-1 (the four manual verification rows) and D-3 (retire `live-probe`).
 
 Baseline: `ava tests/liveStateService.test.ts tests/liveCoachingState.test.ts
@@ -19,6 +20,9 @@ re-run for this audit.
 - **No hidden cards leave the browser.** `liveSnapshot` builds the payload field by
   field; it never spreads `HandState`. The Mystery Card stays out too: the engine
   holds it in `player.mystery`, not `hole`, until the river (`engine.ts:219`, `:638`).
+  Cards the table turns face up at a showdown are not hidden: they ride in
+  `result.shownHands`, chosen by the engine's `showsHoleCards`, the same rule the
+  felt and the hand record use. Never a folded hand, nothing without a showdown.
 - **Credentials are separated.** Owner key → session only; the browser keeps a
   random publishing token; ChatGPT holds OAuth tokens with `hand:read`.
   `X-Owner-Epoch` is always overwritten by the outer Worker, so a client cannot

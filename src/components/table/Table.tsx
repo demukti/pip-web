@@ -30,6 +30,7 @@ import { useMoney } from '@/lib/useMoney'
 import { useIsMobile, useMediaQuery } from '@/lib/useMediaQuery'
 import { useFreerollOnOffer } from '@/lib/useSpendableRoll'
 import { ordinal } from '@/lib/recap'
+import { showsHoleCards, type Player } from '@/lib/poker/engine'
 import {
   KITCHEN_TABLE,
   cashOutValue,
@@ -178,13 +179,16 @@ export function Table() {
   // busting and the table being down to one are the same moment, and a button
   // that ends the tournament it offered to show you is worse than no button.
   const canWatch = member && !venue.cash && seats.filter((s) => s.stack > 0).length > 1
-  const showdownReveal = hand.result?.showdown === true
   // Spectating after busting: the cards are face up because there is nothing
   // left to protect. The player is out, the run is recorded, and nothing they
   // learn here can be played — which is the whole reason this is allowed to
   // exist next to "nothing you can buy changes a hand" (pip-web#120).
   const spectating = status === 'watching'
-  const revealAll = showdownReveal || spectating
+  // The one reveal rule for every seat: the engine's showdown reveal (shared
+  // with the hand record and the live-coaching snapshot), widened only for a
+  // spectator.
+  const revealAll = (p: Player) =>
+    showsHoleCards(hand, p) || (spectating && p.status !== 'folded' && p.status !== 'out')
   const peeking = (status === 'busted' || status === 'won') && peekedAt === handIndex
   const peek = () => {
     sound.play('tap')
@@ -292,7 +296,7 @@ export function Table() {
           avatarSpec={meta.avatar}
           isDealer={p.id === buttonPlayerId}
           isActive={activeId === p.id && !settled}
-          reveal={revealAll && p.status !== 'folded' && p.status !== 'out'}
+          reveal={revealAll(p)}
           action={seatActions[p.id]}
           back={cardBack}
           compact={isMobile}
