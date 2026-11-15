@@ -1,10 +1,12 @@
 # Pip Live coaching — proof of concept
 
 Status: the public diagnostic works in text chat and, by user confirmation, iPhone
-Live in the owner's ChatGPT workspace. The private service and game publisher are implemented
-locally. Private deployment, browser UI testing and authenticated iPhone retrieval
-still need to be completed. No automated poker decisions or model API calls were
-added. The poker engine is unchanged.
+Live in the owner's ChatGPT workspace. The private service is deployed and, by user
+confirmation, readable from an OAuth-protected text chat. The changes in
+[live-coaching-ledger.md](./live-coaching-ledger.md) (2026-11-15) are implemented
+but not yet deployed: the Worker needs one `wrangler deploy` and ChatGPT a tool
+refresh. Authenticated iPhone retrieval is still to be verified. No automated poker
+decisions or model API calls were added. The poker engine is unchanged.
 
 ## Architecture
 
@@ -38,23 +40,30 @@ OAuth consent page; never send it in chat, put it in a URL, commit it, or set it
 
 The game exchanges the owner key for a random 256-bit publishing credential and a
 random session UUID. Only that credential and sequence metadata are retained in
-sessionStorage for the current tab; the owner key is not persisted by the app.
+localStorage, so a new tab or a browser restart resumes without the owner key
+until the session expires; the owner key is not persisted by the app.
 ChatGPT receives audience-bound OAuth tokens with `hand:read` permission, not the
 publishing credential. The library handles PKCE, one-time codes, browser-bound
-consent and refresh tokens. Access tokens last 5 minutes; grants last 7 days.
+consent and refresh tokens. Access tokens last 1 hour; grants last 30 days. The
+owner key is still compared on every read, so rotating it revokes at once.
 
 A new game connection replaces the previous session. A reload claims the existing
 session with a new writer ID, preventing a duplicated tab from silently reusing
-its sequence. Sessions/data expire after 12 hours. Stop sharing deletes the remote
+its sequence. Only one tab publishes: a second tab opened while another is sharing
+does not take over by itself (it offers "Share from this tab"), and a tab that
+loses the writer role stops publishing without deleting the saved session. If the
+claim fails at load because the network is down, the game keeps the saved session
+and retries on the next heartbeat and when the browser comes back online. Sessions/data expire after 12 hours. Stop sharing deletes the remote
 session if online. When offline, remote data remains stale until expiry. Rotating
 `OWNER_KEY` invalidates existing reads and publishing credentials, and requires
 reconnecting both the game and ChatGPT. Scope/identity checks run on every read.
 
 The endpoint returns the latest **acknowledged** upload. An action still in flight
 cannot be visible yet. The UI reports pending/retrying uploads; the API reports
-versions and freshness. Uploads never block gameplay. During an outage/backlog,
-intermediate snapshots may be collapsed to the newest full state, including its
-complete action history, rather than replaying old states after reconnecting.
+versions and freshness. Uploads never block gameplay. At most one upload is in
+flight and one waits behind it; each new capture replaces the waiting one, because
+every snapshot is the newest full state including its complete action history.
+A small "Live"/"Syncing" indicator at the table mirrors the Settings status.
 
 No AI API subscription or per-token billing is introduced. Existing ChatGPT Voice
 limits and Cloudflare hosting/storage quotas apply. Disable script observability
@@ -157,6 +166,43 @@ The read wrapper includes `active`, `stale`, `pending`, `sessionId`, accepted
 If no session exists or it expired, it returns `active: false`, `stale: true`,
 `state: null` and a reason. Never describe this as a live hand.
 
+The service keeps the session in memory and stores the snapshot and its metadata
+under separate keys (`state`, `meta`). Heartbeats are persisted at most once a
+minute, so after a rare mid-session restart of the object a read can report
+`stale` until the next heartbeat. The game also sends a heartbeat as soon as its
+tab becomes visible again or the browser comes back online.
+
+### Diagnosing a slow answer
+
+A read never waits for the next move; it returns the latest stored snapshot at
+once. Every read ends with a `timing` object:
+
+| Field | Meaning |
+| --- | --- |
+| `requestId` | Matches the log line for this request |
+| `serverMs` | Worker entry to result, including token validation and the stored-hand read |
+| `readMs` | The Durable Object round trip alone |
+| `stateAgeMs` | Server clock now minus `receivedAt`; null without a snapshot |
+
+A long wait with a small `serverMs` and a recent `readAt` happened outside the
+service. Uploads are read before the object takes its lock, so a slow upload
+cannot hold up a read.
+
+Each request to `/mcp`, `/mcp/current`, `/token` and `/register` writes one
+`pip_live_request` log line: method, path, RPC method and tool, status, `ms`,
+Cloudflare `colo`, `hasBearer`, and for reads `version`, `stale`, `pending`,
+`stateAgeMs`. It never holds cards, state, tokens, keys, cookies, query strings,
+bodies, client IDs or IP addresses. Observability stays off; watch live with:
+
+```sh
+corepack pnpm exec wrangler tail --config live-state/wrangler.jsonc --format json
+```
+
+Reading the tail: a large `ms` or a 429 on `/token` points to the OAuth layer
+(racing refreshes can be told to retry after 30 s); a large `readMs` points to the
+Durable Object; repeated 401s on `/mcp` with `hasBearer: true` point to a token
+problem; no request at all during the wait points to ChatGPT.
+
 `stale` is true when no snapshot exists, the heartbeat is over 30 seconds old, or
 the browser reports a version newer than the accepted snapshot. An idle hand with
 fresh heartbeats is not stale solely because `capturedAt` is older. A disconnected
@@ -172,13 +218,16 @@ before upload, acknowledged by the server and never accepted out of order.
 | `number`, `variant`, `complete`, `street` | Current hand identity/round; unfinished hands included |
 | `buttonPlayerId`, `smallBlind`, `bigBlind`, `blindPosts` | Button and actual capped blind contributions; blinds are separate from the engine action log |
 | `hero` | Player ID, original-deal position, visible `holeCards`, `equity` (probability 0–1) and `equityDisplay` (Pip's exact rounded text, e.g. `72%`), or null if hero absent |
+| `hero.lastEquity` | `{ equity, equityDisplay, street }`: the most recent hero-turn estimate in this hand and the street it was computed on, or null. A past estimate, not current equity; lost on reload |
+| `hero.stack`, `hero.toCall`, `hero.potOdds` | Chips behind; on the hero's turn the engine's call amount, and `toCall / (pot + toCall)` when there is something to call; otherwise null |
+| `brief` | One plain sentence-style summary built only from the other fields, for a voice answer to lead with. Never contains opponent cards |
 | `communityCards` | Only cards currently on the board; Pip strings such as `Ah`, `Td` |
 | `pot`, `potAwarded` | Total hand contributions from the engine; after completion this is the contested pot already awarded |
 | `players` | IDs/names, original-deal positions, statuses, chips behind and commitments this street/across the hand; no opponent hole cards |
 | `effectiveRemainingStacks` | Per live opponent: the smaller remaining stack between hero and opponent, excluding committed chips |
 | `currentBet`, `currentPlayerToAct` | Current street price and actor, including AI actors; actor null on completion |
 | `availableActions` | Actor ID and exact engine legal-action flags/sizes; bet/raise sizes are total street commitment, call amount is additional chips, capped at stack |
-| `actionHistory` | Actor, street, action type and resulting street commitment in chronological order |
+| `actionHistory` | Actor (ID, `name`, `position`), street, action type and resulting street commitment in chronological order |
 | `result` | Public showdown flag, payouts and pot winners; no private cards/evaluations |
 
 All amounts are play-money chip units. Heads-up uses `BTN/SB`; folded/all-in
@@ -210,7 +259,7 @@ builds the static game, deploys the state Worker and deploys Pages. Configure:
 - Enable `PIP_TUTOR_ENABLED` last. Upstream's release workflow is now gated to the
   upstream repository; the fork does not need its release app or production secrets.
 
-Do not commit/push until requested. Poker actions never trigger repository writes
+Poker actions never trigger repository writes
 or deployments. Source remains on GitHub; runtime snapshots stay in the state service.
 
 ## Verification results
