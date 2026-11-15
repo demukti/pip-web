@@ -2,14 +2,36 @@ import OAuthProvider, {
   AuthorizationError,
   CimdFetchError,
 } from '@cloudflare/workers-oauth-provider'
-import { bearer, bodyText, hash, json, noCache, secretMatches } from './http.mjs'
+import { bearer, bodyText, hash, json, noCache, READ_META, secretMatches } from './http.mjs'
 export { LiveState } from './session.mjs'
 
 const READ = 'hand:read'
+// One line per request to these paths, for an ad-hoc `wrangler tail`.
+const LOGGED = new Set(['/mcp', '/mcp/current', '/token', '/register'])
+const RPC_METHODS = new Set([
+  'initialize',
+  'notifications/initialized',
+  'ping',
+  'tools/list',
+  'tools/call',
+])
+// Per-request trace, keyed on the incoming Request object, which the OAuth library
+// hands unchanged to the API handler. Unlike a header, a client cannot set it.
+// Holds only timings and freshness figures: never cards, tokens or bodies.
+const traces = new WeakMap()
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const object = (env) => env.LIVE_STATE.get(env.LIVE_STATE.idFromName('owner'))
 const internal = (env, path, request) =>
   object(env).fetch(new Request(`https://state${path}`, request))
+
+// Hashed once per isolate and keyed on the key itself, so rotating OWNER_KEY
+// takes effect on the very next request.
+let epochMemo
+const ownerEpoch = (env) => {
+  if (epochMemo?.key !== env.OWNER_KEY)
+    epochMemo = { key: env.OWNER_KEY, value: hash(env.OWNER_KEY) }
+  return epochMemo.value
+}
 
 async function authorize(request, env) {
   const oauth = env.OAUTH_PROVIDER
@@ -20,6 +42,8 @@ async function authorize(request, env) {
     consent.headers.set('Content-Type', 'text/html; charset=utf-8')
     consent.headers.set('Cache-Control', 'no-store')
     consent.headers.set('Referrer-Policy', 'strict-origin')
+    consent.headers.set('Content-Security-Policy', "frame-ancestors 'none'")
+    consent.headers.set('X-Frame-Options', 'DENY')
     return new Response(
       `<!doctype html><html lang="en"><meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1"><title>Pip Live access</title>
@@ -58,7 +82,7 @@ async function authorize(request, env) {
     userId: 'owner',
     scope: approved.request.scope,
     metadata: {},
-    props: { ownerEpoch: await hash(env.OWNER_KEY) },
+    props: { ownerEpoch: await ownerEpoch(env) },
   })
   approved.headers.set('Location', redirectTo)
   return new Response(null, { status: 302, headers: approved.headers })
@@ -67,7 +91,7 @@ async function authorize(request, env) {
 const tool = {
   name: 'get_current_hand',
   description:
-    'Fetch the latest actual Pip poker state. Call again on every game question or follow-up. Check active, stale, pending and timestamps. If stale or inactive, say so; never imply cached cards are current. Explain the state; do not play moves.',
+    "Fetch the latest actual Pip poker state. Call again on every game question or follow-up. Check active, stale, pending and timestamps. If stale or inactive, say so; never imply cached cards are current. Otherwise lead your answer with state.hand.brief, the game's one-sentence summary; hero.toCall, hero.potOdds and hero.stack give the price, and action-history entries carry name and position. hero.lastEquity is an earlier turn's estimate, not current equity. Explain the state; do not play moves. timing.serverMs is the server's own execution time and readAt is when the server answered, so a long wait with a small serverMs happened outside the server.",
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   annotations: {
     readOnlyHint: true,
@@ -79,13 +103,49 @@ const tool = {
 
 const protectedApi = {
   async fetch(request, env, ctx) {
-    if (!ctx.auth.scope.includes(READ) || ctx.props?.ownerEpoch !== (await hash(env.OWNER_KEY))) {
+    if (!ctx.auth.scope.includes(READ) || ctx.props?.ownerEpoch !== (await ownerEpoch(env))) {
       return json({ error: 'Read access missing or revoked; reconnect Pip Live' }, 403)
     }
-    const read = () =>
-      internal(env, '/read', { headers: { 'X-Owner-Epoch': ctx.props.ownerEpoch } })
+    const trace = traces.get(request) ?? { start: Date.now(), requestId: crypto.randomUUID() }
+    // Returns the read payload as JSON text with `timing` appended as its last field;
+    // every other field and its order stay exactly as the Durable Object wrote them.
+    const read = async () => {
+      const begin = Date.now()
+      const response = await internal(env, '/read', {
+        headers: { 'X-Owner-Epoch': ctx.props.ownerEpoch },
+      })
+      const body = await response.text()
+      const readMs = Date.now() - begin
+      let meta = {}
+      try {
+        meta = JSON.parse(response.headers.get(READ_META) ?? '{}')
+      } catch {}
+      trace.read = {
+        version: meta.version ?? null,
+        stale: meta.stale ?? null,
+        pending: meta.pending ?? null,
+        stateAgeMs: meta.stateAgeMs ?? null,
+      }
+      const timing = {
+        requestId: trace.requestId,
+        serverMs: Date.now() - trace.start,
+        readMs,
+        stateAgeMs: trace.read.stateAgeMs,
+      }
+      const text =
+        body.startsWith('{') && body.endsWith('}') && body.length > 2
+          ? `${body.slice(0, -1)},"timing":${JSON.stringify(timing)}}`
+          : body
+      return { status: response.status, text }
+    }
     const path = new URL(request.url).pathname
-    if (path === '/mcp/current' && request.method === 'GET') return read()
+    if (path === '/mcp/current' && request.method === 'GET') {
+      const { status, text } = await read()
+      return new Response(text, {
+        status,
+        headers: { ...noCache, 'Content-Type': 'application/json' },
+      })
+    }
     if (path !== '/mcp') return json({ error: 'Not found' }, 404)
     if (request.method !== 'POST')
       return new Response(null, { status: 405, headers: { Allow: 'POST' } })
@@ -116,6 +176,7 @@ const protectedApi = {
         400,
       )
     }
+    trace.rpcMethod = RPC_METHODS.has(rpc.method) ? rpc.method : 'other'
     if (!('id' in rpc)) return new Response(null, { status: 202 })
     const reply = (result) => json({ jsonrpc: '2.0', id: rpc.id, result })
     const error = (code, message) => json({ jsonrpc: '2.0', id: rpc.id, error: { code, message } })
@@ -132,6 +193,7 @@ const protectedApi = {
         return reply({ tools: [tool] })
       case 'tools/call': {
         const args = rpc.params?.arguments ?? {}
+        trace.tool = rpc.params?.name === tool.name ? tool.name : 'other'
         if (
           rpc.params?.name !== tool.name ||
           typeof args !== 'object' ||
@@ -139,8 +201,8 @@ const protectedApi = {
           Object.keys(args).length
         )
           return error(-32602, 'Unknown tool or invalid arguments')
-        const state = await (await read()).json()
-        return reply({ content: [{ type: 'text', text: JSON.stringify(state) }] })
+        // The read body is already the JSON payload; pass it through as text.
+        return reply({ content: [{ type: 'text', text: (await read()).text }] })
       }
       default:
         return error(-32601, 'Method not found')
@@ -175,7 +237,7 @@ const defaultHandler = {
         return json({ error: 'Invalid writer' }, 400)
       return internal(env, '/create', {
         method: 'POST',
-        body: JSON.stringify({ writerId: data.writerId, ownerEpoch: await hash(env.OWNER_KEY) }),
+        body: JSON.stringify({ writerId: data.writerId, ownerEpoch: await ownerEpoch(env) }),
       })
     }
     const routes = {
@@ -187,68 +249,108 @@ const defaultHandler = {
     const route = routes[`${request.method} ${path}`]
     if (route) {
       const forwarded = new Request(request)
-      forwarded.headers.set('X-Owner-Epoch', await hash(env.OWNER_KEY))
+      forwarded.headers.set('X-Owner-Epoch', await ownerEpoch(env))
       return internal(env, route, forwarded)
     }
     return json({ error: 'Not found' }, 404)
   },
 }
 
+const createProvider = (publicUrl) =>
+  new OAuthProvider({
+    apiRoute: '/mcp',
+    apiHandler: protectedApi,
+    defaultHandler,
+    authorizeEndpoint: '/authorize',
+    tokenEndpoint: '/token',
+    clientRegistrationEndpoint: '/register',
+    scopesSupported: [READ, 'offline_access'],
+    requiredScopes: [READ],
+    resourceMetadata: {
+      resource: `${publicUrl}/mcp`,
+      authorization_servers: [publicUrl],
+      resource_name: 'Pip Live',
+    },
+    clientIdMetadataDocumentEnabled: true,
+    // Owner-key rotation still revokes at once: every read re-checks the epoch.
+    accessTokenTTL: 60 * 60,
+    refreshTokenTTL: 30 * 24 * 60 * 60,
+    // No request bodies, card data, tokens, or OAuth callback URLs in logs.
+    onError: () => {},
+  })
+
+// One provider per isolate, rebuilt only if PUBLIC_URL changes.
+let providerMemo
+const provider = (env) => {
+  if (providerMemo?.url !== env.PUBLIC_URL)
+    providerMemo = { url: env.PUBLIC_URL, value: createProvider(env.PUBLIC_URL) }
+  return providerMemo.value
+}
+
 export default {
   async fetch(request, env, ctx) {
+    const trace = { start: Date.now(), requestId: crypto.randomUUID() }
+    traces.set(request, trace)
+    const path = new URL(request.url).pathname
+    let status = 500
     try {
-      if (!env.PUBLIC_URL || !env.OWNER_KEY || env.OWNER_KEY.length < 32)
-        return json({ error: 'Service not configured' }, 503)
-      const origin = request.headers.get('Origin')
-      const allowed = [
-        env.PUBLIC_URL,
-        ...(env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()),
-      ]
-      if (origin && !allowed.includes(origin)) return json({ error: 'Forbidden origin' }, 403)
-      if (request.method === 'OPTIONS') {
-        if (!origin) return json({ error: 'Origin required' }, 403)
-        return new Response(null, {
-          status: 204,
-          headers: {
-            ...noCache,
-            'Access-Control-Allow-Origin': origin,
-            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-            'Access-Control-Allow-Headers':
-              'Authorization, Content-Type, X-Pip-Session, X-Pip-Writer',
-            Vary: 'Origin',
-          },
-        })
+      const response = await serve(request, env, ctx)
+      status = response.status
+      return response
+    } finally {
+      if (LOGGED.has(path)) {
+        // Allow-listed fields only: no cards, snapshot, tokens, Authorization, cookies,
+        // query string, body, client ID or IP address.
+        console.info(
+          JSON.stringify({
+            event: 'pip_live_request',
+            requestId: trace.requestId,
+            method: request.method,
+            path,
+            rpcMethod: trace.rpcMethod,
+            tool: trace.tool,
+            status,
+            ms: Date.now() - trace.start,
+            colo: request.cf?.colo ?? null,
+            hasBearer: /^Bearer\s/i.test(request.headers.get('Authorization') ?? ''),
+            ...trace.read,
+          }),
+        )
       }
-      const provider = new OAuthProvider({
-        apiRoute: '/mcp',
-        apiHandler: protectedApi,
-        defaultHandler,
-        authorizeEndpoint: '/authorize',
-        tokenEndpoint: '/token',
-        clientRegistrationEndpoint: '/register',
-        scopesSupported: [READ, 'offline_access'],
-        requiredScopes: [READ],
-        resourceMetadata: {
-          resource: `${env.PUBLIC_URL}/mcp`,
-          authorization_servers: [env.PUBLIC_URL],
-          resource_name: 'Pip Live',
-        },
-        clientIdMetadataDocumentEnabled: true,
-        accessTokenTTL: 300,
-        refreshTokenTTL: 7 * 24 * 60 * 60,
-        // No request bodies, card data, tokens, or OAuth callback URLs in logs.
-        onError: () => {},
-      })
-      const response = await provider.fetch(request, env, ctx)
-      const headers = new Headers(response.headers)
-      for (const [name, value] of Object.entries(noCache)) headers.set(name, value)
-      if (origin) {
-        headers.set('Access-Control-Allow-Origin', origin)
-        headers.set('Vary', 'Origin')
-      }
-      return new Response(response.body, { status: response.status, headers })
-    } catch {
-      return json({ error: 'Request failed; check configuration or retry' }, 400)
     }
   },
+}
+
+async function serve(request, env, ctx) {
+  try {
+    if (!env.PUBLIC_URL || !env.OWNER_KEY || env.OWNER_KEY.length < 32)
+      return json({ error: 'Service not configured' }, 503)
+    const origin = request.headers.get('Origin')
+    const allowed = [env.PUBLIC_URL, ...(env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim())]
+    if (origin && !allowed.includes(origin)) return json({ error: 'Forbidden origin' }, 403)
+    if (request.method === 'OPTIONS') {
+      if (!origin) return json({ error: 'Origin required' }, 403)
+      return new Response(null, {
+        status: 204,
+        headers: {
+          ...noCache,
+          'Access-Control-Allow-Origin': origin,
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+          'Access-Control-Allow-Headers':
+            'Authorization, Content-Type, X-Pip-Session, X-Pip-Writer',
+          Vary: 'Origin',
+        },
+      })
+    }
+    const response = await provider(env).fetch(request, env, ctx)
+    const headers = new Headers(response.headers)
+    for (const [name, value] of Object.entries(noCache)) headers.set(name, value)
+    if (origin) {
+      headers.set('Access-Control-Allow-Origin', origin)
+      headers.set('Vary', 'Origin')
+    }
+    return new Response(response.body, { status: response.status, headers })
+  } catch {
+    return json({ error: 'Request failed; check configuration or retry' }, 400)
+  }
 }

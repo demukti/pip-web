@@ -56,3 +56,7 @@ export function randomSecret() {
     b.toString(16).padStart(2, '0'),
   ).join('')
 }
+
+// Internal header from the Durable Object's read to the outer Worker:
+// { version, stale, pending, stateAgeMs }. Never forwarded to clients.
+export const READ_META = 'X-Pip-Read-Meta'

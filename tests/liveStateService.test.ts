@@ -11,24 +11,41 @@ Object.assign(globalThis, {
 register('./cloudflareLoader.mjs', import.meta.url)
 const { default: worker, LiveState } = await import('../live-state/worker.mjs')
 const base = 'https://state.example'
+// The Worker logs one JSON line per OAuth/MCP request; capture them instead of
+// printing. Serial tests run before concurrent ones, so they can slice by index.
+const logged: string[] = []
+console.info = (line: string) => {
+  logged.push(line)
+}
 const key = 'test-owner-key-with-at-least-32-random-characters'
 
 function fixture() {
   const stored = new Map<string, unknown>()
   const kv = new Map<string, string>()
-  const object = new LiveState({
-    blockConcurrencyWhile: async (fn: () => Promise<Response>) => fn(),
-    storage: {
-      get: async (name: string) => structuredClone(stored.get(name)),
-      put: async (name: string, value: unknown) => {
-        stored.set(name, structuredClone(value))
-      },
-      deleteAll: async () => {
-        stored.clear()
-      },
-      setAlarm: async () => {},
+  const writes: string[] = []
+  const storage = {
+    get: async (names: string[]) =>
+      new Map(
+        names
+          .filter((name) => stored.has(name))
+          .map((name) => [name, structuredClone(stored.get(name))]),
+      ),
+    put: async (name: string | Record<string, unknown>, value?: unknown) => {
+      for (const [entry, data] of Object.entries(
+        typeof name === 'string' ? { [name]: value } : name,
+      )) {
+        writes.push(entry)
+        stored.set(entry, structuredClone(data))
+      }
     },
-  })
+    deleteAll: async () => {
+      stored.clear()
+    },
+    setAlarm: async () => {},
+  }
+  const build = () =>
+    new LiveState({ blockConcurrencyWhile: async <T>(fn: () => Promise<T>) => fn(), storage })
+  let object = build()
   const env = {
     PUBLIC_URL: base,
     OWNER_KEY: key,
@@ -60,7 +77,12 @@ function fixture() {
   }
   const fetcher = async (url: string | URL | Request, init?: RequestInit) =>
     worker.fetch(new Request(url, init), env, context)
-  return { env, object, fetcher, kv, stored }
+  // Simulates eviction: a fresh object instance over the same durable storage.
+  const evict = () => {
+    object = build()
+    return object
+  }
+  return { env, live: () => object, evict, fetcher, kv, stored, writes }
 }
 
 const setupSession = async (fetcher: ReturnType<typeof fixture>['fetcher']) => {
@@ -142,6 +164,8 @@ test('consent preserves its form origin and rejects foreign/null origins and mis
   const { fetcher, kv } = fixture()
   const flow = await oauth(fetcher, false)
   t.is(flow.page.headers.get('Referrer-Policy'), 'strict-origin')
+  t.is(flow.page.headers.get('Content-Security-Policy'), "frame-ancestors 'none'")
+  t.is(flow.page.headers.get('X-Frame-Options'), 'DENY')
   t.is((await flow.approve(flow.cookies, key, 'https://evil.example')).status, 403)
   t.is((await flow.approve(flow.cookies, key, 'null')).status, 403)
   t.is((await flow.approve('')).status, 400)
@@ -275,7 +299,28 @@ test('real engine moves publish/read during unfinished hands; old versions canno
       params: { name: 'get_current_hand', arguments: {} },
     }),
   })
-  t.is(JSON.parse((await tool.json()).result.content[0].text).version, 5)
+  const text = (await tool.json()).result.content[0].text
+  t.is(JSON.parse(text).version, 5)
+  // The tool passes the read body through; only readAt/connectionAgeMs/timing vary.
+  const current = await (
+    await fetcher(`${base}/mcp/current`, {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    })
+  ).text()
+  const timeless = (body: string) =>
+    body
+      .replace(/"readAt":"[^"]+","connectionAgeMs":\d+/, '')
+      .replace(/,"timing":\{[^{}]*\}\}$/, '}')
+  t.is(timeless(text), timeless(current))
+  const list = await fetcher(`${base}/mcp`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokens.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
+  })
+  const [described] = (await list.json()).result.tools
+  t.is(described.name, 'get_current_hand')
+  t.true(described.description.includes('state.hand.brief'))
+  t.true(described.description.includes('stale'))
 })
 
 test('session replacement and single-tab claiming revoke older publishing authority', async (t) => {
@@ -416,7 +461,7 @@ test('refresh tokens work, wrong audiences fail, and owner-key rotation revokes 
 })
 
 test('freshness distinguishes an idle hand from missing uploads; alarms respect new sessions', async (t) => {
-  const { fetcher, object, stored } = fixture()
+  const { fetcher, live, evict, stored } = fixture()
   const session = await setupSession(fetcher)
   const flow = await oauth(fetcher)
   const tokens = await (await flow.exchange()).json()
@@ -439,8 +484,9 @@ test('freshness distinguishes an idle hand from missing uploads; alarms respect 
         headers: { Authorization: `Bearer ${tokens.access_token}` },
       })
     ).json()
-  const record = stored.get('session') as { lastSeenAt: number; expiresAt: number }
+  const record = stored.get('meta') as { lastSeenAt: number }
   record.lastSeenAt = Date.now() - 31_000
+  evict()
   t.true((await read()).stale)
   await fetcher(`${base}/heartbeat`, {
     method: 'POST',
@@ -455,12 +501,91 @@ test('freshness distinguishes an idle hand from missing uploads; alarms respect 
   })
   t.true((await read()).pending)
   t.true((await read()).stale)
-  await object.alarm()
+  await live().alarm()
   t.true((await read()).active)
-  const expired = stored.get('session') as { expiresAt: number }
+  const expired = stored.get('meta') as { expiresAt: number }
   expired.expiresAt = Date.now() - 1
-  await object.alarm()
+  await evict().alarm()
+  t.is(stored.size, 0)
   t.false((await read()).active)
+})
+
+test('an evicted object reloads the session from storage; heartbeats never rewrite the snapshot', async (t) => {
+  const { fetcher, evict, stored, writes } = fixture()
+  const session = await setupSession(fetcher)
+  const flow = await oauth(fetcher)
+  const tokens = await (await flow.exchange()).json()
+  const headers = {
+    Authorization: `Bearer ${session.token}`,
+    'X-Pip-Session': session.sessionId,
+    'X-Pip-Writer': 'writer-one',
+  }
+  const hand = startHand({
+    seats: [
+      { id: 'hero', name: 'Hero', stack: 200 },
+      { id: 'ai', name: 'Other', stack: 200 },
+    ],
+    buttonIndex: 0,
+    smallBlind: 5,
+    bigBlind: 10,
+    rng: mulberry32(7),
+  })
+  const snapshot = liveSnapshot(hand, {
+    sessionId: session.sessionId,
+    version: 1,
+    capturedAt: new Date().toISOString(),
+    handNo: 1,
+    heroId: 'hero',
+  })
+  await fetcher(`${base}/publish`, { method: 'PUT', headers, body: JSON.stringify(snapshot) })
+  t.deepEqual(writes.slice(-2).sort(), ['meta', 'state'])
+  const heartbeat = (version: number) =>
+    fetcher(`${base}/heartbeat`, { method: 'POST', headers, body: JSON.stringify({ version }) })
+  const before = writes.length
+  t.is((await heartbeat(1)).status, 200)
+  t.is(writes.length, before) // unchanged version, persisted under a minute ago
+  t.is((await heartbeat(2)).status, 200)
+  t.deepEqual(writes.slice(before), ['meta']) // a new expected version is always saved
+  const read = async () =>
+    (
+      await fetcher(`${base}/mcp/current`, {
+        headers: { Authorization: `Bearer ${tokens.access_token}` },
+      })
+    ).json()
+  const live = await read()
+  evict()
+  const reloaded = await read()
+  t.true(reloaded.active)
+  t.is(reloaded.sessionId, session.sessionId)
+  t.is(reloaded.version, 1)
+  t.true(reloaded.pending)
+  t.deepEqual(reloaded.state, live.state)
+  t.deepEqual(reloaded.state, JSON.parse(JSON.stringify(snapshot)))
+  t.is(reloaded.lastSeenAt, live.lastSeenAt)
+  t.true(reloaded.connectionAgeMs >= 0 && reloaded.connectionAgeMs < 30_000)
+  // The reloaded object still accepts the same writer and the next version.
+  const next = { ...snapshot, version: 2, capturedAt: new Date().toISOString() }
+  t.is(
+    (await fetcher(`${base}/publish`, { method: 'PUT', headers, body: JSON.stringify(next) }))
+      .status,
+    200,
+  )
+  const after = await read()
+  t.is(after.version, 2)
+  t.false(after.stale)
+  t.false(stored.has('session'))
+})
+
+test('a record in the old single-key format reads as no session and is removed', async (t) => {
+  const { fetcher, live, stored } = fixture()
+  stored.set('session', { id: 'old', ownerEpoch: 'x', expiresAt: Date.now() + 60_000 })
+  const read = await live().fetch(
+    new Request('https://state/read', { headers: { 'X-Owner-Epoch': 'x' } }),
+  )
+  t.like(await read.json(), { active: false, state: null, stale: true })
+  t.false(stored.has('session'))
+  t.truthy((await setupSession(fetcher)).sessionId)
+  t.deepEqual([...stored.keys()], ['meta'])
 })
 
 test('publisher retries the latest snapshot after an outage without blocking game capture', async (t) => {
@@ -547,4 +672,207 @@ test('equity survives mid-turn connection and reload, then clears on the next ac
   t.is((await read()).equity, null)
   t.is((await read()).equityDisplay, '—')
   await resumed.disconnect()
+})
+
+const LOG_KEYS = [
+  'event',
+  'requestId',
+  'method',
+  'path',
+  'rpcMethod',
+  'tool',
+  'status',
+  'ms',
+  'colo',
+  'hasBearer',
+  'version',
+  'stale',
+  'pending',
+  'stateAgeMs',
+]
+
+test.serial('reads carry server timing; request logs hold no cards, tokens or keys', async (t) => {
+  const { fetcher } = fixture()
+  const session = await setupSession(fetcher)
+  const flow = await oauth(fetcher)
+  const tokens = await (await flow.exchange()).json()
+  const hand = startHand({
+    seats: [
+      { id: 'hero', name: 'Hero', stack: 200 },
+      { id: 'ai', name: 'Other', stack: 200 },
+    ],
+    buttonIndex: 0,
+    smallBlind: 5,
+    bigBlind: 10,
+    rng: mulberry32(42),
+  })
+  const snapshot = liveSnapshot(hand, {
+    sessionId: session.sessionId,
+    version: 1,
+    capturedAt: new Date().toISOString(),
+    handNo: 1,
+    heroId: 'hero',
+  })
+  const holeCards: string[] = snapshot.hand!.hero!.holeCards
+  t.is(holeCards.length, 2)
+  t.is(
+    (
+      await fetcher(`${base}/publish`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${session.token}`,
+          'X-Pip-Session': session.sessionId,
+          'X-Pip-Writer': 'writer-one',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(snapshot),
+      })
+    ).status,
+    200,
+  )
+  const mark = logged.length
+  const response = await fetcher(`${base}/mcp/current?probe=1`, {
+    headers: { Authorization: `Bearer ${tokens.access_token}`, Cookie: 'secret-cookie=1' },
+  })
+  t.is(response.headers.get('X-Pip-Read-Meta'), null) // internal header never leaves
+  const read = await response.json()
+  // Existing fields keep their order; timing is appended last.
+  t.deepEqual(Object.keys(read), [
+    'active',
+    'sessionId',
+    'version',
+    'receivedAt',
+    'lastSeenAt',
+    'readAt',
+    'connectionAgeMs',
+    'pending',
+    'stale',
+    'state',
+    'timing',
+  ])
+  t.deepEqual(Object.keys(read.timing), ['requestId', 'serverMs', 'readMs', 'stateAgeMs'])
+  const { timing } = read
+  t.regex(timing.requestId, /^[0-9a-f-]{36}$/)
+  t.true(Number.isInteger(timing.readMs) && timing.readMs >= 0)
+  t.true(Number.isInteger(timing.serverMs) && timing.serverMs >= timing.readMs)
+  t.true(timing.serverMs < 10_000)
+  t.true(Number.isInteger(timing.stateAgeMs) && timing.stateAgeMs >= 0)
+  t.true(timing.stateAgeMs < 60_000)
+  t.true(Date.parse(read.readAt) - Date.parse(read.receivedAt) <= timing.stateAgeMs + 1)
+
+  const tool = await fetcher(`${base}/mcp`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokens.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'tools/call',
+      params: { name: 'get_current_hand', arguments: {} },
+    }),
+  })
+  const toolRead = JSON.parse((await tool.json()).result.content[0].text)
+  t.deepEqual(Object.keys(toolRead.timing), ['requestId', 'serverMs', 'readMs', 'stateAgeMs'])
+  t.not(toolRead.timing.requestId, timing.requestId)
+  t.deepEqual(toolRead.state, read.state)
+
+  const lines = logged.slice(mark)
+  t.is(lines.length, 2)
+  const [currentLog, toolLog] = lines.map((line) => JSON.parse(line))
+  t.like(currentLog, {
+    event: 'pip_live_request',
+    requestId: timing.requestId,
+    method: 'GET',
+    path: '/mcp/current',
+    status: 200,
+    colo: null,
+    hasBearer: true,
+    version: 1,
+    stale: false,
+    pending: false,
+  })
+  t.true(Number.isInteger(currentLog.stateAgeMs) && Number.isInteger(currentLog.ms))
+  t.like(toolLog, {
+    requestId: toolRead.timing.requestId,
+    method: 'POST',
+    path: '/mcp',
+    rpcMethod: 'tools/call',
+    tool: 'get_current_hand',
+    status: 200,
+    hasBearer: true,
+    version: 1,
+  })
+  for (const [index, line] of lines.entries()) {
+    const entry = JSON.parse(line)
+    t.true(
+      Object.keys(entry).every((name) => LOG_KEYS.includes(name)),
+      line,
+    )
+    for (const card of holeCards) t.false(line.includes(`"${card}"`), `card in log ${index}`)
+    for (const secret of [
+      tokens.access_token,
+      tokens.access_token.split(':').at(-1),
+      tokens.refresh_token,
+      key,
+      session.token,
+      session.sessionId,
+      flow.client.client_id,
+      'secret-cookie',
+      'probe',
+      'holeCards',
+      'Hero',
+    ])
+      t.false(line.includes(secret), `secret in log ${index}`)
+  }
+})
+
+test.serial('OAuth rejections are logged by the outer Worker with hasBearer', async (t) => {
+  const { fetcher } = fixture()
+  const mark = logged.length
+  const anonymous = await fetcher(`${base}/mcp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  })
+  t.is(anonymous.status, 401)
+  const forged = await fetcher(`${base}/mcp`, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer owner:abc:not-a-real-token',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  })
+  t.is(forged.status, 401)
+  const health = await fetcher(`${base}/health`)
+  t.is(health.status, 200)
+  const lines = logged.slice(mark)
+  t.is(lines.length, 2) // /health is not logged
+  const [first, second] = lines.map((line) => JSON.parse(line))
+  t.like(first, { event: 'pip_live_request', method: 'POST', path: '/mcp', status: 401 })
+  t.false(first.hasBearer)
+  t.like(second, { path: '/mcp', status: 401, hasBearer: true })
+  t.false('rpcMethod' in second) // the body is never read before authentication
+  t.false('version' in second)
+  t.false(lines[1].includes('not-a-real-token'))
+})
+
+test('a malformed upload is rejected before the lock and leaves the session usable', async (t) => {
+  const { fetcher } = fixture()
+  const session = await setupSession(fetcher)
+  const headers = {
+    Authorization: `Bearer ${session.token}`,
+    'Content-Type': 'application/json',
+    'X-Pip-Session': session.sessionId,
+    'X-Pip-Writer': 'writer-one',
+  }
+  for (const body of ['not json', 'null', '[]']) {
+    const rejected = await fetcher(`${base}/publish`, { method: 'PUT', headers, body })
+    t.is(rejected.status, 400)
+  }
+  const beat = await fetcher(`${base}/heartbeat`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ version: 0 }),
+  })
+  t.is(beat.status, 200)
 })
