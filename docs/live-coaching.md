@@ -1,11 +1,12 @@
-# Pip Live coaching — proof of concept
+# Pip Live coaching
 
 Status: the private service is deployed and, by user confirmation, readable from
 an OAuth-protected text chat and from iPhone Live in the owner's ChatGPT workspace. The
-public diagnostic that preceded it is retired. The Worker changes in
-[live-coaching-ledger.md](./live-coaching-ledger.md) (2026-11-15) are implemented
-but not yet deployed: the Worker needs one `wrangler deploy` and ChatGPT a tool
-refresh. No automated poker decisions or model API calls were added. The poker
+public diagnostic that preceded it is retired. The changes in
+[live-coaching-ledger.md](./live-coaching-ledger.md) were deployed by hand on
+2026-11-15: Worker version `4189e5d6`, and the game at
+`https://pip-tutor-tizav.pages.dev` (commit `4838a8e`). Automatic deploys stay off
+until `PIP_TUTOR_ENABLED` is set. No automated poker decisions or model API calls were added. The poker
 rules are unchanged; the engine gained one pure helper, `showsHoleCards`.
 
 ## Architecture
@@ -30,7 +31,7 @@ private iPhone Live retrieval worked; its code is in git history before that dat
 
 ## Access model and limits
 
-This is a single-owner, single-active-session POC for play-money Hold'em against
+This is a single-owner, single-active-session feature for play-money Hold'em against
 Pip's cast. It does not publish multiplayer, lessons, drills, or other variants.
 
 The owner creates a random key (at least 32 characters; recommend 64 random hex

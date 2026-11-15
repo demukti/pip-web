@@ -1,11 +1,11 @@
 # Pip Live coaching — audit and work ledger
 
 Audit of commit `a16271b` ("add authenticated Pip live-state sharing for ChatGPT
-coaching"), checked 2026-11-15. Companion to [live-coaching-poc.md](./live-coaching-poc.md).
+coaching"), checked 2026-11-15. Companion to [live-coaching.md](./live-coaching.md).
 
 **Status (2026-11-15):** Batches A, B and C are implemented on branch
 `feat/live-coaching-ledger`, plus read timing and request logs (see "Diagnosing a
-slow answer" in the POC doc), and showdown reveals in the snapshot
+slow answer" in the live coaching doc), and showdown reveals in the snapshot
 (`result.shownHands`). `pnpm test:all` passes. Not yet deployed. Still open:
 D-1 (the remaining manual verification rows). D-3 is done in the repo: `live-probe`
 and its test are removed; the deployed Worker and the ChatGPT plugin are deleted by
@@ -74,7 +74,7 @@ so do not expect a felt difference from them.
 
 ### Housekeeping
 
-- `live-coaching-poc.md` still says "Do not commit/push until requested" and that
+- `live-coaching.md` still says "Do not commit/push until requested" and that
   the private deployment is pending; the commit is on `origin/main`.
 - Four verification rows are still pending: second-device retrieval, private
   iPhone Live, displayed-equity comparison, stale-after-close.
@@ -113,7 +113,7 @@ against the table.
 | B6 | — | `Content-Security-Policy: frame-ancestors 'none'` on the consent page. | Header assertion in the consent test. | Header present. |
 
 Gate: focused suite, `wrangler deploy --dry-run`, deploy, then one text-chat read.
-B3–B5 are optional; skip them if the POC is not going further.
+B3–B5 are optional; skip them if the feature is not going further.
 
 ### Batch C — needs a decision first
 
@@ -128,10 +128,10 @@ B3–B5 are optional; skip them if the POC is not going further.
 | ID | Change |
 |----|--------|
 | D-1 | Run the four pending verification rows; record versions and timestamps. |
-| D-2 | Update `live-coaching-poc.md`: schema table (A4), token lifetimes (B1), status line, verification results. |
+| D-2 | Update `live-coaching.md`: schema table (A4), token lifetimes (B1), status line, verification results. |
 | D-3 | Done 2026-11-15: private iPhone Live verified by the owner; `live-probe` removed from the repo. |
 
 ## Suggested order
 
 A1 → A2 → A4 → A3 → A5, then B1 + B2 in one deploy, then D-1. Take C and B3–B6
-only if the POC continues.
+only if the feature continues.

@@ -1,4 +1,4 @@
-name: Deploy Pip tutor proof of concept
+name: Deploy Pip tutor
 
 on:
   push:

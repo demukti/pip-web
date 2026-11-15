@@ -16,7 +16,7 @@ export function LiveCoachingSection() {
   const [error, setError] = useState('')
   return (
     <section className="rounded-2xl border border-foreground/10 bg-foreground/[0.03] p-4">
-      <h2 className="font-semibold">Live coaching · proof of concept</h2>
+      <h2 className="font-semibold">Live coaching</h2>
       <p className="mt-2 text-sm text-muted-foreground">
         Share your visible cards and game state with your private ChatGPT connection. Play-money
         Hold’em versus the cast only.
