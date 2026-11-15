@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { useRouter } from 'next/navigation'
 import { PageShell } from '@/components/PageShell'
 import { MembershipSection } from '@/components/settings/MembershipSection'
+import { LiveCoachingSection } from '@/components/settings/LiveCoachingSection'
 import { NotificationsGroup } from '@/components/settings/SlowGamesSection'
 import { AccountGroup } from '@/components/settings/SyncSection'
 import { DeleteAccount } from '@/components/settings/AccountRows'
@@ -50,6 +51,7 @@ export function SettingsScreen() {
           <SoundGroup />
           <NotificationsGroup />
           <TableGroup />
+          <LiveCoachingSection />
         </div>
 
         <div className="mx-auto mt-4 flex max-w-sm flex-col gap-6">

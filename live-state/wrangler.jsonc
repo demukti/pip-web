@@ -1,0 +1,36 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "pip-live-state",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-11-15",
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "workers_dev": true,
+  "vars": {
+    "PUBLIC_URL": "https://pip-live-state.tizav.workers.dev",
+    "ALLOWED_ORIGINS": "http://localhost:3000,https://pip-tutor-tizav.pages.dev"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "LIVE_STATE",
+        "class_name": "LiveState"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["LiveState"]
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "2887fef7714c41759b7ae2dd22c887d7"
+    }
+  ],
+  "observability": {
+    "enabled": false
+  }
+  // OWNER_KEY: set using wrangler secret put; never place it in source or NEXT_PUBLIC_*.
+}

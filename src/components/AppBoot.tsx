@@ -8,6 +8,7 @@ import { soundPackById } from '@/config/cosmetics'
 import { haptics } from '@/lib/haptics'
 import { inApp } from '@/lib/nativeApp'
 import { sound } from '@/lib/sound'
+import { livePublisher } from '@/lib/liveCoaching/publisher'
 
 /**
  * One-time client boot work, mounted from the root layout:
@@ -23,6 +24,7 @@ import { sound } from '@/lib/sound'
  */
 export function AppBoot() {
   useEffect(() => {
+    const stopSharing = livePublisher.start()
     void navigator.storage?.persist?.().catch(() => {})
 
     const profile = useProfile.getState()
@@ -64,7 +66,10 @@ export function AppBoot() {
     // player with no account still makes no request of its own.
     useMembership.getState().start()
 
-    return () => sound.onPlay(null)
+    return () => {
+      sound.onPlay(null)
+      stopSharing()
+    }
   }, [])
   return null
 }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["functions/**/*.ts", "rooms/src/index.ts"],
+  "entry": ["functions/**/*.ts", "rooms/src/index.ts", "live-state/worker.mjs"],
   "ignore": [
     "public/**",
     "supabase/functions/**",

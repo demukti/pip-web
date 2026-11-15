@@ -1,0 +1,245 @@
+# Pip Live coaching — proof of concept
+
+Status: the public diagnostic works in text chat and, by user confirmation, iPhone
+Live in the owner's ChatGPT workspace. The private service and game publisher are implemented
+locally. Private deployment, browser UI testing and authenticated iPhone retrieval
+still need to be completed. No automated poker decisions or model API calls were
+added. The poker engine is unchanged.
+
+## Architecture
+
+- GitHub: source and an opt-in Actions deployment workflow.
+- Cloudflare Pages: Pip's existing static Next.js export. The upstream app assumes
+  root-relative public assets, links and service-worker paths. Keeping a root-hosted
+  Pages site avoids broad changes for a GitHub Pages repository subdirectory.
+- `live-state/`: one Worker, one Durable Object retaining the latest session/state,
+  and a KV namespace used only by the maintained OAuth library. Game reads/writes
+  go directly to the Durable Object, not eventually consistent KV.
+- The browser publishes after the deal, every human/AI action, resume and leaving.
+  A heartbeat every 10 seconds marks the browser as connected even when nobody acts.
+- ChatGPT calls the OAuth-protected read-only `get_current_hand` operation each time.
+  There is no session ID or URL to supply in the conversation.
+
+The snapshot adapter reuses `HandState`, `legalActions()`, `potSize()`, the engine
+log and `cardToString()`. Pip's existing `encodeHand()` is for completed replay
+links; its v2 form contains hidden opponent cards and must not be uploaded live.
+The standalone `live-probe/` Worker remains public and contains no game state.
+
+## Access model and limits
+
+This is a single-owner, single-active-session POC for play-money Hold'em against
+Pip's cast. It does not publish multiplayer, lessons, drills, or other variants.
+
+The owner creates a random key (at least 32 characters; recommend 64 random hex
+characters) and saves it in their password manager. It is stored only as a Worker
+secret named `OWNER_KEY`. Enter it on the game connection form and the Worker's
+OAuth consent page; never send it in chat, put it in a URL, commit it, or set it in
+`NEXT_PUBLIC_*`. This key is separate from the user's Cloudflare login/API token.
+
+The game exchanges the owner key for a random 256-bit publishing credential and a
+random session UUID. Only that credential and sequence metadata are retained in
+sessionStorage for the current tab; the owner key is not persisted by the app.
+ChatGPT receives audience-bound OAuth tokens with `hand:read` permission, not the
+publishing credential. The library handles PKCE, one-time codes, browser-bound
+consent and refresh tokens. Access tokens last 5 minutes; grants last 7 days.
+
+A new game connection replaces the previous session. A reload claims the existing
+session with a new writer ID, preventing a duplicated tab from silently reusing
+its sequence. Sessions/data expire after 12 hours. Stop sharing deletes the remote
+session if online. When offline, remote data remains stale until expiry. Rotating
+`OWNER_KEY` invalidates existing reads and publishing credentials, and requires
+reconnecting both the game and ChatGPT. Scope/identity checks run on every read.
+
+The endpoint returns the latest **acknowledged** upload. An action still in flight
+cannot be visible yet. The UI reports pending/retrying uploads; the API reports
+versions and freshness. Uploads never block gameplay. During an outage/backlog,
+intermediate snapshots may be collapsed to the newest full state, including its
+complete action history, rather than replaying old states after reconnecting.
+
+No AI API subscription or per-token billing is introduced. Existing ChatGPT Voice
+limits and Cloudflare hosting/storage quotas apply. Disable script observability
+for private data (the supplied config does); no application code logs cards,
+credentials or OAuth callback parameters.
+
+## First deployment (local terminal)
+
+From the repository root. Keep the working public probe in place;
+this deploys a **different** Worker.
+
+1. Add the KV and Pages permissions needed by this phase:
+
+   ```sh
+   corepack pnpm exec wrangler login --device \
+     --scopes account:read user:read workers_scripts:write workers_tail:read workers_kv:write pages:write
+   ```
+
+2. Create the OAuth namespace and let Wrangler record its ID in the config:
+
+   ```sh
+   corepack pnpm exec wrangler kv namespace create pip-live-state-oauth \
+     --binding OAUTH_KV --update-config --config live-state/wrangler.jsonc
+   ```
+
+   Do this once. Check that `live-state/wrangler.jsonc` now contains the namespace
+   ID. Keep that ID for subsequent deploys; do not create a new namespace each time.
+
+3. Deploy, then set the owner key interactively (do not paste it into chat):
+
+   ```sh
+   corepack pnpm exec wrangler deploy --config live-state/wrangler.jsonc
+   corepack pnpm exec wrangler secret put OWNER_KEY --config live-state/wrangler.jsonc
+   ```
+
+   The configured service URL is `https://pip-live-state.tizav.workers.dev`.
+   If the printed URL differs, update `PUBLIC_URL` before using OAuth and redeploy.
+   `/health` should return `{"ok":true,"service":"pip-live-state"}` once configured.
+   `/mcp` and `/mcp/current` must reject anonymous reads with an OAuth challenge.
+
+4. First test with the local game:
+
+   ```sh
+   corepack pnpm dev --port 3000
+   ```
+
+   Open `http://localhost:3000/game`, create a local Pip profile if prompted, and
+   open Settings → Live coaching. Enter the private service URL and owner key.
+   Start sharing, sit down at a normal Hold'em table, and wait for `Live · version N`.
+   Sharing is opt-in; inactive installations do not upload gameplay.
+
+5. For the static hosted game:
+
+   ```sh
+   NEXT_PUBLIC_LIVE_STATE_URL=https://pip-live-state.tizav.workers.dev corepack pnpm build
+   corepack pnpm exec wrangler pages project create pip-tutor-tizav --production-branch main
+   corepack pnpm exec wrangler pages deploy out --project-name pip-tutor-tizav --branch main
+   ```
+
+   Create the Pages project once. Use your actual available project name if that
+   one is taken. Update the Worker's `ALLOWED_ORIGINS` to the exact resulting
+   origin and redeploy the Worker if it differs from `https://pip-tutor-tizav.pages.dev`.
+   Only the service URL is a public build setting; no key or publishing token goes
+   in the build. Optional upstream account/membership integrations remain optional.
+
+## Connect ChatGPT to the private service
+
+Create a **new** custom plugin called Pip Live, separate from Pip Live Probe:
+
+- Server URL: `https://pip-live-state.tizav.workers.dev/mcp`.
+- Authentication: OAuth. The server publishes authorization/protected-resource
+  metadata, dynamic client registration and CIMD support. Use discovery if offered;
+  do not select None for this private service.
+- Expected tool: `get_current_hand`, read-only, no arguments.
+- Complete the Worker's sign-in/consent form using the Pip Live owner key. Check
+  the displayed client and return hostname before approving. Review/enable the
+  plugin for the intended workspace seat. Individual app authorization still applies.
+
+Use a new text chat with Pip Live enabled, then iPhone Live in the same workspace:
+"Fetch my current Pip hand. Include its version, street and freshness."
+Ask again after each move; do not accept a response that merely recalls a prior
+hand. Do not manually transfer session URLs or game data between requests.
+
+The supported route and account-specific access are documented in
+[ChatGPT Voice](https://help.openai.com/en/articles/20001274-chatgpt-voice),
+[custom MCP connections](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt),
+[plugin connection testing](https://developers.openai.com/plugins/deploy/connect-chatgpt)
+and [OAuth authentication](https://developers.openai.com/plugins/build/auth).
+Documentation checked 2026-11-15. The public probe's successful Live test does not
+establish successful OAuth-protected game retrieval; verify that separately.
+
+## JSON schema (version 1)
+
+`GET /mcp/current` returns JSON with no-cache/no-store headers and requires an OAuth
+Bearer token with the same resource audience as `/mcp`. `get_current_hand` returns
+the same payload as a JSON text tool result.
+
+The read wrapper includes `active`, `stale`, `pending`, `sessionId`, accepted
+`version`, server `receivedAt`, `lastSeenAt`, `readAt`, `connectionAgeMs`, and `state`.
+If no session exists or it expired, it returns `active: false`, `stale: true`,
+`state: null` and a reason. Never describe this as a live hand.
+
+`stale` is true when no snapshot exists, the heartbeat is over 30 seconds old, or
+the browser reports a version newer than the accepted snapshot. An idle hand with
+fresh heartbeats is not stale solely because `capturedAt` is older. A disconnected
+browser is not detected instantly; the maximum heartbeat window is 30 seconds.
+
+The `state` envelope uses `schemaVersion: 1`, private `sessionId`, positive
+monotonic `version` and UTC ISO `capturedAt`. Versions are allocated and saved
+before upload, acknowledged by the server and never accepted out of order.
+`hand` is null when there is no current supported hand. Otherwise:
+
+| Field | Meaning |
+| --- | --- |
+| `number`, `variant`, `complete`, `street` | Current hand identity/round; unfinished hands included |
+| `buttonPlayerId`, `smallBlind`, `bigBlind`, `blindPosts` | Button and actual capped blind contributions; blinds are separate from the engine action log |
+| `hero` | Player ID, original-deal position, visible `holeCards`, `equity` (probability 0–1) and `equityDisplay` (Pip's exact rounded text, e.g. `72%`), or null if hero absent |
+| `communityCards` | Only cards currently on the board; Pip strings such as `Ah`, `Td` |
+| `pot`, `potAwarded` | Total hand contributions from the engine; after completion this is the contested pot already awarded |
+| `players` | IDs/names, original-deal positions, statuses, chips behind and commitments this street/across the hand; no opponent hole cards |
+| `effectiveRemainingStacks` | Per live opponent: the smaller remaining stack between hero and opponent, excluding committed chips |
+| `currentBet`, `currentPlayerToAct` | Current street price and actor, including AI actors; actor null on completion |
+| `availableActions` | Actor ID and exact engine legal-action flags/sizes; bet/raise sizes are total street commitment, call amount is additional chips, capped at stack |
+| `actionHistory` | Actor, street, action type and resulting street commitment in chronological order |
+| `result` | Public showdown flag, payouts and pot winners; no private cards/evaluations |
+
+All amounts are play-money chip units. Heads-up uses `BTN/SB`; folded/all-in
+players keep their original deal positions. The adapter never serializes the
+engine deck, mystery cards, opponent hole cards, or replay/review payload wholesale.
+
+Equity is the exact existing Monte Carlo estimate from the game store, computed
+on the hero's turn. The publisher does not run a second simulation. During AI
+turns, at completion or when no valid estimate exists, `equity` is null and
+`equityDisplay` is `—`. The estimate is the odds panel's underlying value; the
+player's Show Odds setting can hide that panel without removing it from the
+private payload. Publishing occurs after the estimate is available. Connecting
+or resuming sharing mid-turn preserves the current estimate. These are additive
+schema-v1 fields; existing readers can ignore them. No Worker/plugin redeployment
+or tool metadata refresh is needed; the game client supplies the new fields.
+
+## Automated deployment
+
+`.github/workflows/deploy-pip-tutor.yaml` runs on main pushes or manual dispatch
+only when `PIP_TUTOR_ENABLED=true`. It installs locked dependencies, runs all gates,
+builds the static game, deploys the state Worker and deploys Pages. Configure:
+
+- Repository secrets `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. Use an API
+  token scoped to this account with Workers Scripts Edit, Workers KV Storage Edit
+  and Cloudflare Pages Edit permissions. The OAuth owner key stays on the Worker.
+- Repository variable `PIP_PAGES_PROJECT` with the actual Pages project name.
+- A real persisted `OAUTH_KV` namespace ID in the Worker config, configured Worker
+  secret and an existing Pages project from the first-deployment steps.
+- Enable `PIP_TUTOR_ENABLED` last. Upstream's release workflow is now gated to the
+  upstream repository; the fork does not need its release app or production secrets.
+
+Do not commit/push until requested. Poker actions never trigger repository writes
+or deployments. Source remains on GitHub; runtime snapshots stay in the state service.
+
+## Verification results
+
+| Check | Result |
+| --- | --- |
+| Upstream/fork state and replay inspection | Completed |
+| Public probe deployment | User deployed `https://pip-live-probe.tizav.workers.dev`, version `d3fb52bc-67ea-4c9f-919c-1ae1906c00f2` |
+| Public probe text chat | Two user-supplied tool results at 12:20:09.110Z and 12:20:09.507Z on 2026-11-15, distinct IDs |
+| Public probe iPhone Live | User reports it works; app version and correlated Worker logs not supplied |
+| Initial state and repeated moves in unfinished hands | Automated handler tests use the real engine and real OAuth library with in-memory bindings; initial and four subsequent states retrieved with matching increasing versions |
+| Credential separation, PKCE, refresh, audiences, replay rejection, session replacement and equity propagation | Passed; all 24 focused tests pass, see `tests/liveStateService.test.ts` |
+| Full AVA regression suite | Passed: 1,843 tests, including displayed-equity updates |
+| Repository formatting, type, lint and unused-code checks | Passed; pre-existing unrelated lint warnings remain |
+| Private Worker bundle | Wrangler dry run succeeded; no deployment performed by agent |
+| Private Worker deployment | User supplied deployed URL https://pip-live-state.tizav.workers.dev; namespace ID is recorded locally. Independent web checks remain unavailable from agent tools. |
+| Production game build | Blocked in agent shell fetching upstream Geist/Geist Mono Google Fonts; local terminal/CI build still required |
+| Dependency audit | Agent shell cannot resolve the package registry; result pending |
+| Actual browser UI/gameplay and HTTP endpoint | Pending deployment and user browser run; sandbox denies local port binding |
+| Browser publisher connection | User reports `Live · version 7` from the real game |
+| OAuth consent browser issue | Fixed `no-referrer` causing `Origin: null` on form posts by using `strict-origin`; origin and browser-bound cookie checks remain enforced. Private deployment/retest required. |
+| Actual second-device private retrieval | Pending |
+| Actual OAuth-protected ChatGPT text and iPhone Live retrieval | Pending; public diagnostic success does not satisfy these rows |
+| Private OAuth text retrieval after consent fix | User reports it works; private iPhone Live and displayed-equity comparison still require explicit verification |
+
+For the deployed demonstration: connect the real game, fetch its initial state,
+make a move, fetch again, and repeat at least four times through an unfinished
+flop/turn. Compare cards, actor, pot, action history and increasing version against
+the browser. Repeat from the iPhone using Pip Live; record exact tool versions and
+timestamps. Close the game tab and verify stale reporting after 30 seconds. Stop
+sharing and confirm the read tool reports no active session. Test anonymous reads
+separately (must be denied). These are distinct from local handler tests.

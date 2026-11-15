@@ -1,6 +1,7 @@
 'use client'
 
 import { MembershipSection } from '@/components/settings/MembershipSection'
+import { LiveCoachingSection } from '@/components/settings/LiveCoachingSection'
 import { NotificationsGroup } from '@/components/settings/SlowGamesSection'
 import { AccountGroup } from '@/components/settings/SyncSection'
 import { DeleteAccount } from '@/components/settings/AccountRows'
@@ -37,6 +38,7 @@ export function SettingsDialog({
           <DisplayGroup />
           <SoundGroup />
           <TableGroup />
+          <LiveCoachingSection />
           <NotificationsGroup />
           <MembershipSection />
           <AccountGroup />
