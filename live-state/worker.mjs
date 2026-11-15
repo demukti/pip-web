@@ -91,7 +91,7 @@ async function authorize(request, env) {
 const tool = {
   name: 'get_current_hand',
   description:
-    "Fetch the latest actual Pip poker state. Call again on every game question or follow-up. Check active, stale, pending and timestamps. If stale or inactive, say so; never imply cached cards are current. Otherwise lead your answer with state.hand.brief, the game's one-sentence summary; hero.toCall, hero.potOdds and hero.stack give the price, and action-history entries carry name and position. hero.lastEquity is an earlier turn's estimate, not current equity. Explain the state; do not play moves. timing.serverMs is the server's own execution time and readAt is when the server answered, so a long wait with a small serverMs happened outside the server.",
+    "Fetch the latest actual Pip poker state. Call again on every game question or follow-up. Check active, stale, pending and timestamps. If stale or inactive, say so; never imply cached cards are current. Otherwise lead your answer with state.hand.brief, the game's one-sentence summary; hero.toCall, hero.potOdds and hero.stack give the price, and action-history entries carry name and position. hero.lastEquity is an earlier turn's estimate, not current equity. After a showdown, hand.result.shownHands lists the hands turned face up; opponents' cards are never present at any other time, so never guess them. Explain the state; do not play moves. timing.serverMs is the server's own execution time and readAt is when the server answered, so a long wait with a small serverMs happened outside the server.",
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   annotations: {
     readOnlyHint: true,

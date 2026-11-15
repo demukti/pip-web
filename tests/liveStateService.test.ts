@@ -320,6 +320,7 @@ test('real engine moves publish/read during unfinished hands; old versions canno
   const [described] = (await list.json()).result.tools
   t.is(described.name, 'get_current_hand')
   t.true(described.description.includes('state.hand.brief'))
+  t.true(described.description.includes('hand.result.shownHands'))
   t.true(described.description.includes('stale'))
 })
 
