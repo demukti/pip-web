@@ -1,4 +1,4 @@
-import test from 'ava'
+import test, { type ExecutionContext } from 'ava'
 import { register } from 'node:module'
 import { startHand, applyAction } from '@/lib/poker/engine'
 import { mulberry32 } from '@/lib/poker/cards'
@@ -18,11 +18,17 @@ console.info = (line: string) => {
   logged.push(line)
 }
 const key = 'test-owner-key-with-at-least-32-random-characters'
+const HOUR = 60 * 60 * 1000
+const DAY = 24 * HOUR
+// How far a restart lets a session outlive its stored expiry: heartbeats save at
+// most once a minute, so up to a minute of activity may be unsaved.
+const RESTART_GRACE_MS = 60_000
 
 function fixture() {
   const stored = new Map<string, unknown>()
   const kv = new Map<string, string>()
   const writes: string[] = []
+  const alarms: number[] = []
   const storage = {
     get: async (names: string[]) =>
       new Map(
@@ -41,7 +47,9 @@ function fixture() {
     deleteAll: async () => {
       stored.clear()
     },
-    setAlarm: async () => {},
+    setAlarm: async (time: number) => {
+      alarms.push(time)
+    },
   }
   const build = () =>
     new LiveState({ blockConcurrencyWhile: async <T>(fn: () => Promise<T>) => fn(), storage })
@@ -82,7 +90,76 @@ function fixture() {
     object = build()
     return object
   }
-  return { env, live: () => object, evict, fetcher, kv, stored, writes }
+  return { env, live: () => object, evict, fetcher, kv, stored, writes, alarms }
+}
+
+// Freezes Date.now for one serial test. Concurrent tests run only after every serial
+// one, and the teardown restores the real clock, so no other test sees it.
+function freezeClock(t: ExecutionContext) {
+  const real = Date.now
+  let now = real()
+  const start = now
+  Date.now = () => now
+  t.teardown(() => {
+    Date.now = real
+  })
+  return {
+    start,
+    at: () => now,
+    advance: (ms: number) => {
+      now += ms
+    },
+  }
+}
+
+type Meta = { createdAt: number; expiresAt: number; lastSeenAt: number }
+
+// The publishing calls a game tab makes, with a hand-built schema-v1 envelope so these
+// tests exercise only the Worker.
+function writer(
+  fetcher: ReturnType<typeof fixture>['fetcher'],
+  session: { sessionId: string; token: string },
+) {
+  const headers = {
+    Authorization: `Bearer ${session.token}`,
+    'Content-Type': 'application/json',
+    'X-Pip-Session': session.sessionId,
+    'X-Pip-Writer': 'writer-one',
+  }
+  return {
+    heartbeat: (version = 0) =>
+      fetcher(`${base}/heartbeat`, { method: 'POST', headers, body: JSON.stringify({ version }) }),
+    publish: (version: number) =>
+      fetcher(`${base}/publish`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          schemaVersion: 1,
+          sessionId: session.sessionId,
+          version,
+          capturedAt: new Date(Date.now()).toISOString(),
+          hand: null,
+        }),
+      }),
+    claim: () =>
+      fetcher(`${base}/claim`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ writerId: 'writer-one' }),
+      }),
+  }
+}
+
+// Heartbeats every 11 hours, inside the 12-hour idle limit, until the session ends;
+// returns the last expiry the server granted.
+async function keepAlive(w: ReturnType<typeof writer>, clock: ReturnType<typeof freezeClock>) {
+  let last = 0
+  for (;;) {
+    clock.advance(11 * HOUR)
+    const beat = await w.heartbeat()
+    if (beat.status !== 200) return last
+    last = (await beat.json()).expiresAt
+  }
 }
 
 const setupSession = async (fetcher: ReturnType<typeof fixture>['fetcher']) => {
@@ -322,6 +399,8 @@ test('real engine moves publish/read during unfinished hands; old versions canno
   t.true(described.description.includes('state.hand.brief'))
   t.true(described.description.includes('hand.result.shownHands'))
   t.true(described.description.includes('stale'))
+  for (const field of ['hero.handName', 'players[].style', 'reads', 'table.status'])
+    t.true(described.description.includes(field), field)
 })
 
 test('session replacement and single-tab claiming revoke older publishing authority', async (t) => {
@@ -505,7 +584,7 @@ test('freshness distinguishes an idle hand from missing uploads; alarms respect 
   await live().alarm()
   t.true((await read()).active)
   const expired = stored.get('meta') as { expiresAt: number }
-  expired.expiresAt = Date.now() - 1
+  expired.expiresAt = Date.now() - RESTART_GRACE_MS - 1
   await evict().alarm()
   t.is(stored.size, 0)
   t.false((await read()).active)
@@ -683,6 +762,7 @@ const LOG_KEYS = [
   'rpcMethod',
   'tool',
   'status',
+  'error',
   'ms',
   'colo',
   'hasBearer',
@@ -792,6 +872,7 @@ test.serial('reads carry server timing; request logs hold no cards, tokens or ke
     pending: false,
   })
   t.true(Number.isInteger(currentLog.stateAgeMs) && Number.isInteger(currentLog.ms))
+  t.false('error' in currentLog)
   t.like(toolLog, {
     requestId: toolRead.timing.requestId,
     method: 'POST',
@@ -877,3 +958,225 @@ test('a malformed upload is rejected before the lock and leaves the session usab
   })
   t.is(beat.status, 200)
 })
+
+test.serial('a caught exception is logged on any path, by class name only', async (t) => {
+  const { fetcher } = fixture()
+  const mark = logged.length
+  const unparsable = await fetcher(`${base}/sessions?probe=1`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, Cookie: 'secret-cookie=1' },
+    body: '{"writerId": As-Kd-private-body',
+  })
+  // The response is unchanged: a generic 400.
+  t.is(unparsable.status, 400)
+  t.deepEqual(await unparsable.json(), { error: 'Request failed; check configuration or retry' })
+  const oversized = await fetcher(`${base}/sessions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}` },
+    body: 'x'.repeat(5000),
+  })
+  t.is(oversized.status, 400)
+  t.is((await fetcher(`${base}/health`)).status, 200) // no error, not logged
+  const lines = logged.slice(mark)
+  t.is(lines.length, 2)
+  const [parse, size] = lines.map((line) => JSON.parse(line))
+  t.like(parse, {
+    event: 'pip_live_request',
+    method: 'POST',
+    path: '/sessions',
+    status: 400,
+    error: 'SyntaxError',
+    hasBearer: true,
+  })
+  t.like(size, { path: '/sessions', status: 400, error: 'Error' })
+  for (const [index, line] of lines.entries()) {
+    t.true(
+      Object.keys(JSON.parse(line)).every((name) => LOG_KEYS.includes(name)),
+      line,
+    )
+    // Never the message (V8 quotes the input), the body, the key, cookies or query.
+    for (const secret of [
+      'As-Kd',
+      'private-body',
+      'Unexpected',
+      'JSON',
+      'too large',
+      'xxxx',
+      key,
+      'secret-cookie',
+      'probe',
+    ])
+      t.false(line.includes(secret), `secret in log ${index}`)
+  }
+})
+
+test.serial(
+  'accepted heartbeats, uploads and claims slide the expiry, up to seven days',
+  async (t) => {
+    const clock = freezeClock(t)
+    const { fetcher, alarms, live, stored, writes } = fixture()
+    const session = await setupSession(fetcher)
+    t.is(session.expiresAt, clock.start + 12 * HOUR)
+    t.deepEqual(alarms, [clock.start + 12 * HOUR])
+    const w = writer(fetcher, session)
+    clock.advance(2 * HOUR)
+    const beat = await w.heartbeat()
+    t.is(beat.status, 200)
+    t.like(await beat.json(), { acceptedVersion: 0, expiresAt: clock.at() + 12 * HOUR })
+    t.is((stored.get('meta') as Meta).expiresAt, clock.at() + 12 * HOUR)
+    // A heartbeat soon after a save slides the expiry in memory without writing.
+    const before = writes.length
+    clock.advance(10_000)
+    t.is((await (await w.heartbeat()).json()).expiresAt, clock.at() + 12 * HOUR)
+    t.is(writes.length, before)
+    clock.advance(HOUR)
+    const published = await w.publish(1)
+    t.is(published.status, 200)
+    t.like(await published.json(), { acceptedVersion: 1, expiresAt: clock.at() + 12 * HOUR })
+    clock.advance(HOUR)
+    const claimed = await w.claim()
+    t.is(claimed.status, 200)
+    t.deepEqual(await claimed.json(), { version: 1, expiresAt: clock.at() + 12 * HOUR })
+    const granted = clock.at() + 12 * HOUR
+    // A rejected upload does not slide it.
+    clock.advance(HOUR)
+    t.is((await w.publish(1)).status, 409)
+    t.is(live().meta.expiresAt, granted)
+    // The alarm set at creation finds the session alive and re-arms for its real expiry.
+    clock.advance(7 * HOUR - 10_000)
+    t.is(clock.at(), clock.start + 12 * HOUR)
+    await live().alarm()
+    t.true(stored.has('state'))
+    t.is(alarms.at(-1), granted)
+    // Activity keeps it going, but never past seven days from creation.
+    t.is((await w.heartbeat(1)).status, 200)
+    t.is(await keepAlive(w, clock), clock.start + 7 * DAY)
+    t.true(clock.at() >= clock.start + 7 * DAY)
+    t.is(stored.size, 0)
+  },
+)
+
+test.serial(
+  'the real publisher saves each expiry the server slides, so sharing outlives the first 12 hours',
+  async (t) => {
+    const clock = freezeClock(t)
+    const { fetcher, live } = fixture()
+    const values = new Map<string, string>()
+    const storage = () => ({
+      getItem: (k: string) => values.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        values.set(k, v)
+      },
+      removeItem: (k: string) => {
+        values.delete(k)
+      },
+    })
+    // What the game tab keeps in localStorage, and what the Durable Object holds.
+    const saved = () => JSON.parse(values.get('pip.live-coaching.v1') ?? 'null')?.expiresAt
+    const server = () => live().meta.expiresAt
+    const publisher = new LivePublisher(storage, fetcher as typeof fetch)
+    await publisher.connect(base, key)
+    await publisher.flush()
+    t.is(saved(), clock.start + 12 * HOUR)
+    // A heartbeat: the service slides the expiry and the tab saves the one it was given.
+    clock.advance(11 * HOUR)
+    await publisher.ping()
+    t.is(server(), clock.at() + 12 * HOUR)
+    t.is(saved(), server())
+    // Past the first 12 hours the tab still counts the session live, and an upload
+    // slides it again.
+    clock.advance(11 * HOUR)
+    t.true(clock.at() > clock.start + 12 * HOUR)
+    publisher.capture(null, 0)
+    await publisher.flush()
+    t.like(publisher.getStatus(), { connected: true, acceptedVersion: 2 })
+    t.is(server(), clock.at() + 12 * HOUR)
+    t.is(saved(), server())
+    // A reload resumes from the saved record, past the expiry the session started
+    // with, and the claim slides it once more.
+    clock.advance(11 * HOUR)
+    const reloaded = new LivePublisher(storage, fetcher as typeof fetch)
+    await reloaded.restore()
+    await reloaded.flush()
+    t.like(reloaded.getStatus(), { connected: true, acceptedVersion: 3 })
+    t.is(server(), clock.at() + 12 * HOUR)
+    t.is(saved(), server())
+    await reloaded.disconnect()
+  },
+)
+
+test.serial('a session idle for 12 hours expires and its data is deleted', async (t) => {
+  const clock = freezeClock(t)
+  const { fetcher, alarms, evict, live, stored } = fixture()
+  const first = writer(fetcher, await setupSession(fetcher))
+  clock.advance(HOUR)
+  t.is((await first.publish(1)).status, 200)
+  clock.advance(12 * HOUR)
+  await live().alarm()
+  t.is(stored.size, 0)
+  t.is((await first.heartbeat()).status, 401)
+  // After a restart the stored expiry gets the restart allowance, then still ends.
+  const second = writer(fetcher, await setupSession(fetcher))
+  clock.advance(HOUR)
+  t.is((await second.publish(1)).status, 200)
+  const expiry = clock.at() + 12 * HOUR
+  evict()
+  clock.advance(12 * HOUR)
+  await live().alarm()
+  t.true(stored.has('state'))
+  t.is(alarms.at(-1), expiry + RESTART_GRACE_MS)
+  clock.advance(RESTART_GRACE_MS)
+  await live().alarm()
+  t.is(stored.size, 0)
+  t.is((await second.heartbeat()).status, 401)
+})
+
+test.serial('a restart between heartbeat saves never ends a session early', async (t) => {
+  const clock = freezeClock(t)
+  const { fetcher, evict, live, stored } = fixture()
+  const session = await setupSession(fetcher)
+  const w = writer(fetcher, session)
+  t.is((await w.publish(1)).status, 200)
+  clock.advance(30_000)
+  // Not saved: under a minute since the upload saved the session.
+  t.is((await (await w.heartbeat(1)).json()).expiresAt, clock.at() + 12 * HOUR)
+  t.is((stored.get('meta') as Meta).expiresAt, clock.start + 12 * HOUR)
+  evict()
+  // Past the stored expiry, before the one the unsaved heartbeat earned.
+  clock.advance(12 * HOUR - 29_000)
+  await live().alarm()
+  t.true(stored.has('state'))
+  const beat = await w.heartbeat(1)
+  t.is(beat.status, 200)
+  t.is((await beat.json()).expiresAt, clock.at() + 12 * HOUR)
+  // The rebuilt session keeps its creation time, so the seven-day cap still counts
+  // from the original connection.
+  const meta = stored.get('meta') as Meta
+  t.is(meta.createdAt, clock.start)
+  t.is(meta.expiresAt, clock.at() + 12 * HOUR)
+  t.is(await keepAlive(w, clock), clock.start + 7 * DAY)
+})
+
+test.serial(
+  'a session stored before expiry slid keeps working, capped from its creation',
+  async (t) => {
+    const clock = freezeClock(t)
+    const { fetcher, evict, stored } = fixture()
+    const session = await setupSession(fetcher)
+    // As the previous version stored it, 10 hours after creating it: no createdAt.
+    const legacy = stored.get('meta') as Partial<Meta>
+    delete legacy.createdAt
+    legacy.expiresAt = clock.at() + 2 * HOUR
+    legacy.lastSeenAt = clock.at() - HOUR
+    evict()
+    const w = writer(fetcher, session)
+    const beat = await w.heartbeat()
+    t.is(beat.status, 200)
+    t.is((await beat.json()).expiresAt, clock.at() + 12 * HOUR)
+    const createdAt = clock.at() - 10 * HOUR
+    t.like(stored.get('meta'), { createdAt, expiresAt: clock.at() + 12 * HOUR })
+    t.is((await w.publish(1)).status, 200)
+    t.is(await keepAlive(w, clock), createdAt + 7 * DAY)
+    t.is(stored.size, 0)
+  },
+)

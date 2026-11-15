@@ -1,5 +1,6 @@
+import { cardToString } from '@/lib/poker/cards'
 import type { HandState } from '@/lib/poker/engine'
-import { heroTurnEquity, liveSnapshot, type LiveSnapshot } from './state'
+import { heroTurnEquity, liveSnapshot, type LiveSnapshot, type LiveTableContext } from './state'
 
 const KEY = 'pip.live-coaching.v1'
 const HERO_ID = 'hero'
@@ -7,6 +8,8 @@ const HERO_ID = 'hero'
 const HOLD_MS = 90_000
 const HEARTBEAT_MS = 10_000
 const RETRY_MS = 2000
+/** An upload's slid expiry is saved at once only when it moved at least this far. */
+const EXPIRY_SAVE_MS = 60_000
 
 interface Connection {
   url: string
@@ -30,6 +33,16 @@ interface SharingStatus {
   resuming: boolean
   /** Another tab of this browser holds the saved session and is publishing. */
   otherTab: boolean
+  /**
+   * The last heartbeat or upload got through. Cleared by a failed one (the
+   * service then soon reports the state stale), restored by the next success.
+   */
+  reachable: boolean
+  /**
+   * Sharing stopped without the player asking: the session expired, was
+   * revoked, or storage failed. Reset by connecting and by Stop sharing.
+   */
+  ended: boolean
 }
 type Storage = Pick<globalThis.Storage, 'getItem' | 'setItem' | 'removeItem'>
 
@@ -57,6 +70,38 @@ const browserEvents: LiveEvents = {
 /** Another tab claimed the shared session: stop here without touching storage. */
 class WriterLost extends Error {}
 
+/** The service's sliding expiry, when a response carries one (older services do not). */
+function expiryOf(result: unknown): number | null {
+  const value = (result as { expiresAt?: unknown } | null)?.expiresAt
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * Which deal a remembered estimate belongs to. The hand number alone repeats
+ * when a bust re-seats the player at a fresh table, so the hero's cards and the
+ * board so far go with it. Both only grow within one deal (a Mystery Card joins
+ * the hole at the river), so a later state of the same deal extends them.
+ */
+interface DealMark {
+  handNo: number
+  hole: string[]
+  board: string[]
+}
+function markOf(hand: HandState, handNo: number): DealMark {
+  const hero = hand.players.find((player) => player.id === HERO_ID)
+  return {
+    handNo,
+    hole: (hero?.hole ?? []).map(cardToString),
+    board: hand.community.map(cardToString),
+  }
+}
+const startsWith = (cards: string[], prefix: string[]) =>
+  prefix.length <= cards.length && prefix.every((card, i) => cards[i] === card)
+const sameDeal = (earlier: DealMark, now: DealMark) =>
+  earlier.handNo === now.handNo &&
+  startsWith(now.hole, earlier.hole) &&
+  startsWith(now.board, earlier.board)
+
 /** Network errors are isolated here: gameplay never waits for publishing. */
 export class LivePublisher {
   private connection: Connection | null = null
@@ -65,8 +110,10 @@ export class LivePublisher {
     handNo: 0,
     equity: null,
   }
-  /** Latest hero-turn estimate in the current hand (C3). Memory only. */
-  private lastEquity: { handNo: number; equity: number; street: string } | null = null
+  /** Latest hero-turn estimate in the current deal (C3). Memory only. */
+  private lastEquity: { mark: DealMark; equity: number; street: string } | null = null
+  /** The table around the hand (venue, run status, reads), read at capture time. */
+  private tableContext: (() => LiveTableContext | null) | null = null
   /** Newest snapshot not yet sent. Each capture overwrites it: every snapshot is the full state. */
   private pending: LiveSnapshot | null = null
   private listeners = new Set<() => void>()
@@ -78,6 +125,8 @@ export class LivePublisher {
   private generation = 0
   private ready = false
   private writerId = ''
+  /** The expiry last written to storage, so a small slide can skip a write. */
+  private savedExpiresAt = 0
 
   constructor(
     private storage: () => Storage | null = () =>
@@ -91,6 +140,34 @@ export class LivePublisher {
   subscribe = (listener: () => void) => {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+  /**
+   * Supply the table context each snapshot carries (`tableContext.ts`). Kept
+   * injectable so this module never imports a store and runs in Node without
+   * one. Returns a function that removes it.
+   */
+  setTableContext(provider: (() => LiveTableContext | null) | null) {
+    this.tableContext = provider
+    return () => {
+      if (this.tableContext === provider) this.tableContext = null
+    }
+  }
+  /**
+   * Publish the last captured hand again because what is around it changed
+   * (the run ended, the hand went to the handover). Only while `hand` is still
+   * that hand: a newer deal captures itself.
+   */
+  refresh(hand: HandState | null) {
+    if (!hand || hand !== this.last.hand) return
+    this.capture(this.last.hand, this.last.handNo, this.last.equity)
+  }
+  private readTable() {
+    try {
+      return this.tableContext?.() ?? null
+    } catch {
+      // A fault in the context must never stop the hand itself being shared.
+      return null
+    }
   }
   private update(patch: Partial<SharingStatus>) {
     this.status = { ...this.status, ...patch }
@@ -128,6 +205,7 @@ export class LivePublisher {
       heldAt: Date.now(),
     }
     storage.setItem(KEY, JSON.stringify(record))
+    this.savedExpiresAt = record.expiresAt
   }
   /** Delete the saved session, but only if it is still this session's. */
   private forget(sessionId: string | undefined) {
@@ -203,6 +281,8 @@ export class LivePublisher {
       connected: true,
       resuming: false,
       otherTab: false,
+      reachable: true,
+      ended: false,
       version: 0,
       acceptedVersion: 0,
       message: 'Connected; publishing current state',
@@ -232,6 +312,7 @@ export class LivePublisher {
         this.update({
           resuming: false,
           otherTab: false,
+          ended: true,
           message: 'Sharing session expired. Reconnect to continue sharing.',
         })
         return
@@ -252,6 +333,7 @@ export class LivePublisher {
           connected: false,
           resuming: false,
           otherTab: false,
+          ended: true,
           message: 'Sharing session expired or revoked. Reconnect with the owner key.',
         })
         return
@@ -260,14 +342,16 @@ export class LivePublisher {
         this.resuming()
         return
       }
-      const { version } = await response.json()
+      const result = await response.json()
       if (generation !== this.generation) return
+      const { version } = result
       this.pending = null
       this.connection = {
         url: saved.url,
         sessionId: saved.sessionId,
         token: saved.token,
-        expiresAt: saved.expiresAt,
+        // A sliding session: the claim itself counts as activity.
+        expiresAt: expiryOf(result) ?? saved.expiresAt,
         version: Math.max(saved.version, version),
       }
       this.ready = true
@@ -276,6 +360,8 @@ export class LivePublisher {
         connected: true,
         resuming: false,
         otherTab: false,
+        reachable: true,
+        ended: false,
         version,
         acceptedVersion: version,
         message: 'Connected',
@@ -295,7 +381,7 @@ export class LivePublisher {
       const connection = this.connection
       if (!connection || !this.ready) return
       if (connection.expiresAt <= Date.now()) {
-        this.clear('Session expired. Reconnect to continue sharing.')
+        this.clear('Session expired. Reconnect to continue sharing.', true)
         return
       }
       connection.version++
@@ -309,20 +395,43 @@ export class LivePublisher {
         heroId: HERO_ID,
         displayedEquity,
         lastEquity: this.lastEquity,
+        table: hand ? this.readTable() : null,
       })
       this.update({ version: connection.version, message: 'Publishing…' })
       this.pump()
     } catch (error) {
       if (error instanceof WriterLost) this.release()
-      else this.clear('Sharing paused: storage or snapshot unavailable.')
+      else this.clear('Sharing paused: storage or snapshot unavailable.', true)
     }
   }
-  /** Keep the newest valid hero-turn estimate of this hand; forget it on a new hand. */
+  /** Keep the newest valid hero-turn estimate of this deal; forget it on a new one. */
   private remember(hand: HandState | null, handNo: number, estimate: number | null) {
-    if (!hand || this.lastEquity?.handNo !== handNo) this.lastEquity = null
-    if (!hand) return
+    if (!hand) {
+      this.lastEquity = null
+      return
+    }
+    const mark = markOf(hand, handNo)
+    if (this.lastEquity && !sameDeal(this.lastEquity.mark, mark)) this.lastEquity = null
     const equity = heroTurnEquity(hand, HERO_ID, estimate)
-    if (equity !== null) this.lastEquity = { handNo, equity, street: hand.street }
+    if (equity !== null) this.lastEquity = { mark, equity, street: hand.street }
+  }
+  /**
+   * Take a later expiry from a service response and save it with the session.
+   * Throws `WriterLost` like `save`; other storage faults are left for the
+   * next heartbeat to retry.
+   */
+  private extend(result: unknown) {
+    const expiresAt = expiryOf(result)
+    if (expiresAt === null || !this.connection) return
+    this.connection.expiresAt = expiresAt
+    // `capture` has just saved this session; a slide of under a minute can
+    // ride along with the next save instead of costing a write per upload.
+    if (Math.abs(expiresAt - this.savedExpiresAt) < EXPIRY_SAVE_MS) return
+    try {
+      this.save()
+    } catch (error) {
+      if (error instanceof WriterLost) throw error
+    }
   }
   /** One upload in flight; at most one newer snapshot waits behind it. */
   private pump() {
@@ -338,17 +447,29 @@ export class LivePublisher {
           const response = await this.send('/publish', 'PUT', next)
           if (generation !== this.generation) return
           const result = await response.json()
+          // A connect or claim during the body read: this answer is for an older session.
+          if (generation !== this.generation) return
           if (result.code === 'writer_changed') {
             this.release()
             return
           }
           if ([401, 403].includes(response.status)) {
-            this.clear('Session revoked or expired. Reconnect.')
+            this.clear('Session revoked or expired. Reconnect.', true)
             return
           }
           if (!response.ok && !(response.status === 409 && result.acceptedVersion >= next.version))
             throw new Error('Upload failed')
+          if (response.ok) {
+            try {
+              this.extend(result)
+            } catch {
+              // Only WriterLost escapes `extend`: another tab holds the session now.
+              this.release()
+              return
+            }
+          }
           this.update({
+            reachable: true,
             acceptedVersion: result.acceptedVersion,
             message: this.pending ? 'Publishing…' : `Live · version ${result.acceptedVersion}`,
           })
@@ -357,7 +478,10 @@ export class LivePublisher {
           // Retry the newest full snapshot (it includes the whole history);
           // a capture made during the failed upload has already replaced it.
           this.pending ??= next
-          this.update({ message: 'Upload pending; retrying. ChatGPT may see stale data.' })
+          this.update({
+            reachable: false,
+            message: 'Upload pending; retrying. ChatGPT may see stale data.',
+          })
           this.retry = setTimeout(() => this.pump(), RETRY_MS)
           return
         }
@@ -381,28 +505,43 @@ export class LivePublisher {
       const response = await this.send('/heartbeat', 'POST', { version: this.connection.version })
       if (generation !== this.generation) return
       const result = await response.json()
+      // A connect or claim during the body read: this answer is for an older session.
+      if (generation !== this.generation) return
       if (result.code === 'writer_changed') {
         this.release()
         return
       }
       if ([401, 403].includes(response.status)) {
-        this.clear('Session expired or revoked. Reconnect.')
+        this.clear('Session expired or revoked. Reconnect.', true)
         return
       }
       if (!response.ok) {
-        this.update({ message: 'Connection interrupted; current state may be stale.' })
+        this.update({
+          reachable: false,
+          message: 'Connection interrupted; current state may be stale.',
+        })
         return
       }
       try {
-        this.save() // Mark this tab as the live holder for other tabs.
+        // Mark this tab as the live holder for other tabs, with any later expiry.
+        const expiresAt = expiryOf(result)
+        if (expiresAt !== null) this.connection.expiresAt = expiresAt
+        this.save()
       } catch (error) {
         if (error instanceof WriterLost) return this.release()
       }
-      if (!this.pending && !this.sending && !this.retry)
-        this.update({ message: `Live · version ${result.acceptedVersion}` })
+      if (!this.pending && !this.sending && !this.retry) {
+        this.update({ reachable: true, message: `Live · version ${result.acceptedVersion}` })
+        return
+      }
+      // An upload is still waiting: only its own success says the latest state
+      // landed, so `reachable` stays as the upload left it (no Offline/Syncing
+      // flicker each heartbeat while uploads keep failing). The service answers
+      // again, though: send a failed upload now rather than at its retry.
+      if (this.retry) this.pump()
     } catch {
       if (generation !== this.generation) return
-      this.update({ message: 'Offline; ChatGPT may see stale data.' })
+      this.update({ reachable: false, message: 'Offline; ChatGPT may see stale data.' })
     }
   }
   /**
@@ -412,11 +551,31 @@ export class LivePublisher {
   tick() {
     if (this.connection && this.ready) return this.ping()
     if (this.restoring) return
+    // A saved session this tab was resuming: keep trying (as before).
     if (this.status.resuming) return this.restore()
-    if (this.status.otherTab && !this.otherTabHolds()) {
+    // Another tab shares now (perhaps one connected after this tab's session
+    // ended): say so, and never claim its session from under it.
+    if (this.otherTabHolds()) return this.yieldToOtherTab()
+    if (this.status.otherTab) {
       if (this.load()) return this.restore()
       this.update({ otherTab: false, message: 'Off' })
     }
+  }
+  private yieldToOtherTab() {
+    if (this.status.otherTab && !this.status.ended) return
+    this.update({
+      otherTab: true,
+      ended: false,
+      message: 'Sharing from another Pip tab.',
+    })
+  }
+  /**
+   * Put away the "Sharing ended" notice. Local only: no request, no storage,
+   * so it can never touch a session another tab has started since.
+   */
+  dismiss() {
+    if (!this.status.ended || this.status.connected) return
+    this.update({ ended: false, message: 'Off' })
   }
   /** Back online or visible again: hidden tabs throttle timers, so act now. */
   private wake = () => {
@@ -435,8 +594,7 @@ export class LivePublisher {
     }
   }
   start() {
-    if (this.otherTabHolds())
-      this.update({ otherTab: true, message: 'Sharing from another Pip tab.' })
+    if (this.otherTabHolds()) this.yieldToOtherTab()
     else void this.restore()
     this.heartbeat = setInterval(() => void this.tick(), HEARTBEAT_MS)
     const unsubscribe = [
@@ -472,12 +630,21 @@ export class LivePublisher {
       connected: false,
       resuming: false,
       otherTab: true,
+      ended: false,
       message: 'Sharing moved to another Pip tab.',
     })
   }
-  private clear(message: string) {
+  /** Forget the session. `ended` when the player did not ask for it (expiry, revocation, a fault). */
+  private clear(message: string, ended = false) {
     this.forget(this.drop())
-    this.update({ connected: false, resuming: false, otherTab: false, message })
+    this.update({
+      connected: false,
+      resuming: false,
+      otherTab: false,
+      reachable: true,
+      ended,
+      message,
+    })
   }
   /** Stop sharing: revoke remotely if reachable and forget the saved session. */
   async disconnect() {
@@ -486,7 +653,7 @@ export class LivePublisher {
     const connection = this.connection ?? saved
     const writerId = saved?.writerId ?? this.writerId
     this.forget(this.drop())
-    this.update({ resuming: false, otherTab: false, message: 'Stopping…' })
+    this.update({ resuming: false, otherTab: false, ended: false, message: 'Stopping…' })
     const generation = this.generation
     try {
       await this.send('/publish', 'DELETE', undefined, connection, writerId)
@@ -506,5 +673,7 @@ const OFF: SharingStatus = {
   acceptedVersion: 0,
   resuming: false,
   otherTab: false,
+  reachable: true,
+  ended: false,
 }
 export const livePublisher = new LivePublisher()

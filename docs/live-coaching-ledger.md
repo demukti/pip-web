@@ -1,21 +1,30 @@
 # Pip Live coaching — audit and work ledger
 
-Audit of commit `a16271b` ("add authenticated Pip live-state sharing for ChatGPT
+Audit of commit `4176069` ("add authenticated Pip live-state sharing for ChatGPT
 coaching"), checked 2026-11-15. Companion to [live-coaching.md](./live-coaching.md).
+This is the historical record; the live coaching doc describes the code as it stands.
 
-**Status (2026-11-15):** Batches A, B and C are implemented on branch
-`feat/live-coaching-ledger`, plus read timing and request logs (see "Diagnosing a
-slow answer" in the live coaching doc), and showdown reveals in the snapshot
-(`result.shownHands`). `pnpm test:all` passes. Not yet deployed. Still open:
-D-1 (the remaining manual verification rows). D-3 is done in the repo: `live-probe`
-and its test are removed; the deployed Worker and the ChatGPT plugin are deleted by
-the owner.
+**Status (2026-11-15):**
 
-Baseline: `ava tests/liveStateService.test.ts tests/liveCoachingState.test.ts
-tests/liveProbe.test.ts` → 24 passed. `pnpm test:all` and `pnpm build` were not
-re-run for this audit.
+- Batches A, B and C, read timing and request logs, and showdown reveals
+  (`result.shownHands`) are on `main` and were deployed by hand on 2026-11-15 at
+  `cd6ae72`. D-3 is done: `live-probe` and its test are removed from the repo; the
+  deployed probe Worker and its ChatGPT plugin were deleted by the owner.
+- After that deploy: `cc2e06b` (the tool description explains showdown cards) and
+  Batch E below. Neither is known to be deployed. Going live needs a Worker deploy,
+  a Pages deploy of the game, and a tool-metadata refresh in ChatGPT.
+- Still open: D-1, the manual checks listed under Verification in the live coaching
+  doc.
+
+Baseline for the audit, at `4176069`: `ava tests/liveStateService.test.ts
+tests/liveCoachingState.test.ts tests/liveProbe.test.ts` → 24 passed.
+`tests/liveProbe.test.ts` has since been removed with the probe (D-3). `pnpm
+test:all` and `pnpm build` were not re-run for the audit.
 
 ## Audit
+
+File and line references in this section are as of the audited commit `4176069`;
+the code has moved since.
 
 ### Sound as built
 
@@ -72,21 +81,20 @@ so do not expect a felt difference from them.
 | F4 | Heartbeats run on `setInterval`. Browsers throttle timers in hidden tabs, so a backgrounded game is likely reported `stale` after 30 s although its state is current. Not reproduced here. |
 | F5 | Grants last 7 days, so the ChatGPT consent form returns weekly. |
 
-### Housekeeping
+### Housekeeping (at the audit; all since resolved)
 
-- `live-coaching.md` still says "Do not commit/push until requested" and that
-  the private deployment is pending; the commit is on `origin/main`.
-- Four verification rows are still pending: second-device retrieval, private
-  iPhone Live, displayed-equity comparison, stale-after-close.
-- `live-probe` is a public Worker with observability on. It holds no game data,
-  but it has served its purpose once private iPhone Live is verified.
-- The consent page sets no `frame-ancestors` policy. Low risk (the form needs a
-  typed key), cheap to add.
+- `live-coaching.md` said "Do not commit/push until requested" and that the private
+  deployment was pending. Rewritten.
+- Four verification rows were pending: second-device retrieval, private iPhone Live,
+  displayed-equity comparison, stale-after-close. Private iPhone Live is now
+  reported working; the other three remain under D-1.
+- `live-probe` was a public Worker with observability on. Retired (D-3).
+- The consent page set no `frame-ancestors` policy. Added (B6).
 
 ## Work ledger
 
-Ordered so that each batch is one deploy and one retest. Batch A changes only the
-game, so it needs no Worker deploy and no ChatGPT reconnect.
+Ordered so that each batch is one deploy and one retest. Batches A–C are done and
+deployed at `cd6ae72`; Batch E is done in the repo, not deployed.
 
 ### Batch A — game client only
 
@@ -98,40 +106,51 @@ game, so it needs no Worker deploy and no ChatGPT reconnect.
 | A4 | S2 | Additive schema-v1 fields in `state.ts`: `hero.stack`, `hero.toCall`, `hero.potOdds` (hero's turn only); `name` and `position` on each `actionHistory` entry; `hand.brief`, one plain sentence built from the same fields. Chips only, never `$`. | `liveCoachingState.test.ts`: exact `brief` for preflop, facing a bet, and complete; pot-odds arithmetic; privacy test still passes. | ChatGPT can answer from `brief` alone. |
 | A5 | F4 | Send a heartbeat on `visibilitychange` → visible and on `online`. | Publisher test with injected events. | Returning to the tab clears `stale` within one request. |
 
-Gate: `pnpm test:all`, then play a hand with sharing on and compare `brief`
-against the table.
-
 ### Batch B — Worker (one `wrangler deploy`)
 
 | ID | Fixes | Change | Tests | Done when |
 |----|-------|--------|-------|-----------|
-| B1 | S1, F5 | `accessTokenTTL` 300 → 3600. Optionally `refreshTokenTTL` 7 → 30 days. | Existing refresh/rotation test must still pass unchanged. | No refresh pause inside a normal session. |
+| B1 | S1, F5 | `accessTokenTTL` 300 → 3600; `refreshTokenTTL` 7 → 30 days. | Existing refresh/rotation test must still pass unchanged. | No refresh pause inside a normal session. |
 | B2 | — | Tool description: tell the model to lead with `brief` and to check `stale`/`pending`. Needs a tool-metadata refresh in ChatGPT. | `tools/list` assertion. | Voice answers open with the situation. |
 | B3 | S3, S4 | Memoize the owner-epoch hash and the `OAuthProvider` per `env` at module scope. | Existing suite; rotation test proves the memo is keyed on the key. | One hash per isolate, not per request. |
 | B4 | S5 | `tools/call`: embed `await (await read()).text()` directly. | Existing read tests. | No parse/re-serialize. |
 | B5 | S6, S7 | Durable Object: hold the session in memory; store `state` and metadata under separate keys; heartbeats update `lastSeenAt` in memory and persist it at most once a minute; drop `blockConcurrencyWhile` on `/read`. | Freshness and alarm tests; add one that rebuilds the object from storage mid-session. | A heartbeat no longer rewrites the snapshot. |
 | B6 | — | `Content-Security-Policy: frame-ancestors 'none'` on the consent page. | Header assertion in the consent test. | Header present. |
 
-Gate: focused suite, `wrangler deploy --dry-run`, deploy, then one text-chat read.
-B3–B5 are optional; skip them if the feature is not going further.
-
-### Batch C — needs a decision first
+### Batch C — decided and done
 
 | ID | Fixes | Decision | Change |
 |----|-------|----------|--------|
-| C1 | F1 | Is a publishing token in localStorage for up to 12 h acceptable on this device? | Move `pip.live-coaching.v1` to localStorage. `restore()` already claims with a new writer ID. Never the owner key. |
-| C2 | F2 | Should the table show sharing status? | Small status dot near the table chrome, theme tokens only, driven by `livePublisher.subscribe`. Verify in the running app. |
-| C3 | F3 | Should a past estimate be shown at all? | Carry the last hero-turn estimate as `hero.lastEquity` with its street. This reverses the tested rule "a prior-turn estimate is never carried into an AI turn", so keep `equity` null and add a separate field. |
+| C1 | F1 | A publishing token in localStorage is acceptable on this device. | `pip.live-coaching.v1` in localStorage. `restore()` claims with a new writer ID. Never the owner key. |
+| C2 | F2 | The table shows sharing status. | Small badge in the table's corner, theme tokens only, driven by `livePublisher.subscribe`. |
+| C3 | F3 | A past estimate is shown, separately. | `hero.lastEquity` with its street; `equity` stays null outside the hero's turn. |
 
 ### Batch D — close out
 
 | ID | Change |
 |----|--------|
-| D-1 | Run the four pending verification rows; record versions and timestamps. |
-| D-2 | Update `live-coaching.md`: schema table (A4), token lifetimes (B1), status line, verification results. |
+| D-1 | Open. Run the manual checks under Verification in the live coaching doc; record versions and timestamps. |
+| D-2 | Done: `live-coaching.md` describes the current schema, lifetimes, status and verification. |
 | D-3 | Done 2026-11-15: private iPhone Live verified by the owner; `live-probe` removed from the repo. |
 
-## Suggested order
+### Batch E — table context, sliding sessions, honest badge (not deployed)
 
-A1 → A2 → A4 → A3 → A5, then B1 + B2 in one deploy, then D-1. Take C and B3–B6
-only if the feature continues.
+Needs a Worker deploy (E1, E3, E6), a Pages deploy (E1, E2, E4, E5) and a
+tool-metadata refresh in ChatGPT (E3). This batch's tests carry no ID prefix (the
+`A1:`…`C3:` prefixes in `livePublisher.test.ts` are the earlier batches' ledger
+IDs); the Tests column names them by title.
+
+| ID | Fixes | Change | Tests | Done when |
+|----|-------|--------|-------|-----------|
+| E1 | 12 h hard expiry ended long sessions mid-play | Sliding session: 12 h after the last accepted heartbeat, upload or claim, capped at 7 days from creation. `/claim`, `/heartbeat` and successful `/publish` return `expiresAt`; the publisher saves it. A restart grants up to 60 s extra, never less. Old `meta` records without `createdAt` keep working. | `liveStateService`: four serial expiry tests, plus "the real publisher saves each expiry the server slides…" (real publisher against the real Worker). `livePublisher`: "claim, heartbeat and publish slide the saved expiry…", "an older service without expiresAt…", "a later expiry never overwrites a record another tab now holds", "an upload that slides the expiry by under a minute costs no extra storage write", and the two "…answer read after a reconnect is ignored" tests (a stale response never lands on a newer session). | A session in use outlives its first 12 hours. |
+| E2 | Coach could not see the table around the hand | `hero.handName`; `players[].style`, `players[].reads`; `hand.table` (venue, format, 1-based blind level, run status, place, score hands); `brief` gains the made hand and a run-over sentence. Read from the stores by `tableContext.ts`, started from `AppBoot.tsx`; a status change re-publishes the last hand. While spectating, `table.status` is `watching` and `place` the real finish, though the store itself flips to `playing`/`busted` around each spectated hand (see the live coaching doc, Spectating). `game.ts` unchanged. | `liveCoachingState`: six new tests (hand name, Mystery Card, reads, table, run-over brief). `livePublisher`: "table context: read at capture time…" and `refresh`. `liveCoachingTable` (4, real stores, a real game played in Node): reads and style as the dialog shows them, none for the hero; the double publish at each hand end; bust, spectate and a new table. | `brief` says when the run is over. |
+| E3 | — | Tool description: run over when `table.status` is busted/won; trust `hero.handName`; use `style`/`reads`, never invent tendencies. | `tools/list` assertion names the new fields. | Metadata refreshed in ChatGPT. |
+| E4 | Badge showed nothing when sharing failed | Status gains `reachable` and `ended`. Badge: Live, Syncing, Offline, Reconnecting, Sharing ended. Settings: Dismiss button for an ended session, local only (no request, no storage); an ended tab that sees another tab sharing clears it. A successful heartbeat restores `reachable` only when no upload is waiting. | `livePublisher`: "a failed heartbeat marks the service unreachable…", "a failed upload marks it unreachable…", "heartbeats that get through do not flip the badge…" (reachable); "expiry or revocation ends sharing involuntarily…", "stopping, or another tab taking over…", "a saved session found expired at load…", "Dismiss is local…", "an ended tab that sees another tab sharing…", "starting an ended tab while another tab shares…" (ended). Badge and Settings unverified in a browser. | Every failure mode is visible at the table. |
+| E5 | `hero.lastEquity` could leak into a fresh table's hand of the same number | Estimate keyed on the deal: hand number, hero cards and board so far. | `livePublisher`: "a new table dealt in place does not inherit…". | — |
+| E6 | Exceptions on unlogged paths left no trace | `pip_live_request` gains `error` (exception class name only) and is written on any path where one was caught. | "a caught exception is logged on any path, by class name only"; log-key allow-list includes `error`. | — |
+| E7 | Deploy ran no checks | Workflow runs `pnpm test:types` and `pnpm ava tests/live*.test.ts` before building. Full gate still local. | — | — |
+| E8 | An upstream merge could silently drop a hook | `tests/liveCoachingHooks.test.ts` reads `game.ts`, `AppBoot.tsx`, `PlayerDialog.tsx`, `Table.tsx` and fails if a capture site, the wiring or the reads derivation changes. | 8 tests. | — |
+
+Gate: `ava tests/live*.test.ts` → 90 passed (2026-11-15). Then `pnpm test:all`,
+deploy, refresh tool metadata, and the manual demonstration in the live coaching
+doc.

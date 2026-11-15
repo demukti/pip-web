@@ -18,9 +18,12 @@ function server() {
     beats: 0,
     claims: 0,
     snapshots: [] as { version: number; hand: Record<string, unknown> | null }[],
+    /** A sliding-expiry service returns this from claim, heartbeat and publish; unset = older service. */
+    expiresAt: undefined as number | undefined,
     /** Return a response (or throw) instead of the normal handling. */
     override: {} as Record<string, () => Response | Promise<Response>>,
   }
+  const expiry = () => (s.expiresAt === undefined ? {} : { expiresAt: s.expiresAt })
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
   const fetcher: typeof fetch = async (input, init) => {
@@ -42,13 +45,13 @@ function server() {
     if (route === 'POST /claim') {
       s.claims++
       s.writerId = body.writerId
-      return json({ version: s.version })
+      return json({ version: s.version, ...expiry() })
     }
     if (headers.get('X-Pip-Writer') !== s.writerId)
       return json({ error: 'taken', code: 'writer_changed' }, 409)
     if (route === 'POST /heartbeat') {
       s.beats++
-      return json({ acceptedVersion: s.version })
+      return json({ acceptedVersion: s.version, ...expiry() })
     }
     if (route === 'DELETE /publish') return json({ revoked: true })
     if (route === 'PUT /publish') {
@@ -56,7 +59,7 @@ function server() {
       if (body.version <= s.version) return json({ acceptedVersion: s.version }, 409)
       s.version = body.version
       s.snapshots.push(body)
-      return json({ acceptedVersion: s.version })
+      return json({ acceptedVersion: s.version, ...expiry() })
     }
     return json({ error: 'Not found' }, 404)
   }
@@ -413,4 +416,451 @@ test('C3: the last hero-turn estimate rides along until the hand changes', async
   publisher.capture(aiTurn, 4)
   await publisher.flush()
   t.is(latestHero().lastEquity, null)
+})
+
+const headsUp = (seed: number) =>
+  startHand({
+    seats: [
+      { id: 'hero', name: 'Hero', stack: 200 },
+      { id: 'ai', name: 'Other', stack: 200 },
+    ],
+    buttonIndex: 0,
+    smallBlind: 5,
+    bigBlind: 10,
+    rng: mulberry32(seed),
+  })
+
+test('a new table dealt in place does not inherit the last estimate of its hand 1', async (t) => {
+  const { s, fetcher } = server()
+  const { storage } = memoryStorage()
+  const publisher = new LivePublisher(storage, fetcher, fakeEvents().events)
+  await publisher.connect(base, ownerKey)
+  // Hand 1 at the first table: an estimate on the hero's turn.
+  publisher.capture(headsUp(42), 1, 0.81)
+  // Busted, re-seated without leaving: the new table's hand 1, an AI to act.
+  const fresh = applyAction(headsUp(7), { type: 'call' })
+  t.notDeepEqual(fresh.players[0].hole, headsUp(42).players[0].hole)
+  publisher.capture(fresh, 1)
+  await publisher.flush()
+  const hero = s.snapshots.at(-1)!.hand!.hero as Record<string, unknown>
+  t.is(hero.lastEquity, null)
+  t.false(String(s.snapshots.at(-1)!.hand!.brief).includes('Last estimate'))
+  // The same deal later on still keeps it.
+  publisher.capture(headsUp(7), 1, 0.4)
+  publisher.capture(fresh, 1)
+  await publisher.flush()
+  t.deepEqual((s.snapshots.at(-1)!.hand!.hero as Record<string, unknown>).lastEquity, {
+    equity: 0.4,
+    equityDisplay: '40%',
+    street: 'preflop',
+  })
+})
+
+test('a failed heartbeat marks the service unreachable until the next one succeeds', async (t) => {
+  const { s, fetcher } = server()
+  const { storage } = memoryStorage()
+  const publisher = new LivePublisher(storage, fetcher, fakeEvents().events)
+  await publisher.connect(base, ownerKey)
+  await publisher.flush()
+  t.true(publisher.getStatus().reachable)
+  s.override['POST /heartbeat'] = () => {
+    throw new Error('offline')
+  }
+  await publisher.ping()
+  t.true(publisher.getStatus().connected)
+  t.false(publisher.getStatus().reachable)
+  s.override['POST /heartbeat'] = () => new Response('{}', { status: 503 })
+  await publisher.ping()
+  t.false(publisher.getStatus().reachable)
+  delete s.override['POST /heartbeat']
+  await publisher.ping()
+  t.true(publisher.getStatus().reachable)
+  t.is(publisher.getStatus().message, 'Live · version 1')
+})
+
+test('a failed upload marks it unreachable; a heartbeat that gets through sends it at once', async (t) => {
+  const { s, fetcher } = server()
+  const { storage } = memoryStorage()
+  const publisher = new LivePublisher(storage, fetcher, fakeEvents().events)
+  t.teardown(publisher.start())
+  await publisher.connect(base, ownerKey)
+  await publisher.flush()
+  s.override['PUT /publish'] = () => {
+    throw new Error('offline')
+  }
+  publisher.capture(null, 0)
+  await publisher.flush()
+  t.false(publisher.getStatus().reachable)
+  t.true(publisher.getStatus().acceptedVersion < publisher.getStatus().version)
+  delete s.override['PUT /publish']
+  await publisher.ping()
+  await publisher.flush()
+  t.true(publisher.getStatus().reachable)
+  t.is(publisher.getStatus().acceptedVersion, 2)
+  t.deepEqual(s.puts, [1, 2])
+})
+
+test('expiry or revocation ends sharing involuntarily; connect and stop reset it', async (t) => {
+  const { s, fetcher } = server()
+  const { storage } = memoryStorage()
+  const publisher = new LivePublisher(storage, fetcher, fakeEvents().events)
+  await publisher.connect(base, ownerKey)
+  await publisher.flush()
+  t.false(publisher.getStatus().ended)
+  s.token = 'rotated'
+  await publisher.ping()
+  t.false(publisher.getStatus().connected)
+  t.true(publisher.getStatus().ended)
+  s.token = 'token-1'
+  await publisher.connect(base, ownerKey)
+  t.false(publisher.getStatus().ended)
+  // A rejected upload ends it too.
+  s.token = 'rotated'
+  publisher.capture(null, 0)
+  await publisher.flush()
+  t.true(publisher.getStatus().ended)
+  // Stop sharing puts it away (so does Dismiss, locally: see below).
+  await publisher.disconnect()
+  t.false(publisher.getStatus().ended)
+  t.false(publisher.getStatus().connected)
+})
+
+test('stopping, or another tab taking over, is not an involuntary end', async (t) => {
+  const { s, fetcher } = server()
+  const { values, storage } = memoryStorage()
+  const publisher = new LivePublisher(storage, fetcher, fakeEvents().events)
+  await publisher.connect(base, ownerKey)
+  await publisher.flush()
+  s.writerId = 'other-tab'
+  values.set(KEY, JSON.stringify({ ...JSON.parse(values.get(KEY)!), writerId: 'other-tab' }))
+  await publisher.ping()
+  t.true(publisher.getStatus().otherTab)
+  t.false(publisher.getStatus().ended)
+
+  const other = new LivePublisher(memoryStorage().storage, server().fetcher, fakeEvents().events)
+  await other.connect(base, ownerKey)
+  await other.disconnect()
+  t.false(other.getStatus().ended)
+})
+
+test('a saved session found expired at load is an involuntary end', async (t) => {
+  const { fetcher } = server()
+  const { values, storage } = memoryStorage()
+  await new LivePublisher(storage, fetcher, fakeEvents().events).connect(base, ownerKey)
+  const saved = JSON.parse(values.get(KEY)!)
+  values.set(KEY, JSON.stringify({ ...saved, heldAt: 0, expiresAt: Date.now() - 1 }))
+  const reloaded = new LivePublisher(storage, fetcher, fakeEvents().events)
+  await reloaded.restore()
+  t.true(reloaded.getStatus().ended)
+  t.false(reloaded.getStatus().resuming)
+})
+
+const storedExpiry = (values: Map<string, string>) => JSON.parse(values.get(KEY)!).expiresAt
+
+test('claim, heartbeat and publish slide the saved expiry when the service sends one', async (t) => {
+  const { s, fetcher } = server()
+  const { values, storage } = memoryStorage()
+  const publisher = new LivePublisher(storage, fetcher, fakeEvents().events)
+  await publisher.connect(base, ownerKey)
+  await publisher.flush()
+  const initial = storedExpiry(values)
+
+  const hour = 3_600_000
+  s.expiresAt = initial + hour
+  await publisher.ping()
+  t.is(storedExpiry(values), initial + hour)
+
+  s.expiresAt = initial + 2 * hour
+  publisher.capture(null, 0)
+  await publisher.flush()
+  t.is(storedExpiry(values), initial + 2 * hour)
+
+  s.expiresAt = initial + 3 * hour
+  const reloaded = new LivePublisher(storage, fetcher, fakeEvents().events)
+  await reloaded.restore()
+  await reloaded.flush()
+  t.true(reloaded.getStatus().connected)
+  t.is(storedExpiry(values), initial + 3 * hour)
+  t.false([...values.values()].join('').includes(ownerKey))
+})
+
+test('an upload that slides the expiry by under a minute costs no extra storage write', async (t) => {
+  const { s, fetcher } = server()
+  const { values, storage } = memoryStorage()
+  let writes = 0
+  const counted = () => {
+    const inner = storage()
+    return {
+      ...inner,
+      setItem: (k: string, v: string) => {
+        writes++
+        inner.setItem(k, v)
+      },
+    }
+  }
+  const publisher = new LivePublisher(counted, fetcher, fakeEvents().events)
+  await publisher.connect(base, ownerKey)
+  await publisher.flush()
+  const initial = storedExpiry(values)
+
+  s.expiresAt = initial + 30_000
+  writes = 0
+  publisher.capture(null, 0)
+  await publisher.flush()
+  t.is(writes, 1, 'only the capture’s own save')
+  t.is(storedExpiry(values), initial)
+  // Kept in memory: the next save (here the heartbeat's) carries it.
+  s.expiresAt = undefined
+  await publisher.ping()
+  t.is(storedExpiry(values), initial + 30_000)
+
+  s.expiresAt = initial + 5 * 60_000
+  writes = 0
+  publisher.capture(null, 0)
+  await publisher.flush()
+  t.is(writes, 2, 'a slide of minutes is saved at once')
+  t.is(storedExpiry(values), initial + 5 * 60_000)
+})
+
+/** A response whose body arrives only when `gate` opens. */
+const slowBody = (gate: Promise<void>, body: unknown) =>
+  ({
+    ok: true,
+    status: 200,
+    json: async () => {
+      await gate
+      return body
+    },
+  }) as Response
+
+test('a heartbeat answer read after a reconnect is ignored', async (t) => {
+  const { s, fetcher } = server()
+  const { values, storage } = memoryStorage()
+  const publisher = new LivePublisher(storage, fetcher, fakeEvents().events)
+  await publisher.connect(base, ownerKey)
+  await publisher.flush()
+  const gate = deferred()
+  s.override['POST /heartbeat'] = () =>
+    slowBody(gate.promise, { acceptedVersion: 0, expiresAt: 1234 })
+  const beat = publisher.ping()
+  await settle()
+  delete s.override['POST /heartbeat']
+  await publisher.connect(base, ownerKey) // a new session while the old body is read
+  await publisher.flush()
+  gate.release()
+  await beat
+  t.not(storedExpiry(values), 1234)
+  t.true(publisher.getStatus().connected)
+  t.is(publisher.getStatus().message, 'Live · version 1')
+})
+
+test('an upload answer read after a reconnect is ignored', async (t) => {
+  const { s, fetcher } = server()
+  const { values, storage } = memoryStorage()
+  const publisher = new LivePublisher(storage, fetcher, fakeEvents().events)
+  await publisher.connect(base, ownerKey)
+  await publisher.flush()
+  const gate = deferred()
+  s.override['PUT /publish'] = () =>
+    slowBody(gate.promise, { acceptedVersion: 99, expiresAt: 1234 })
+  publisher.capture(null, 0)
+  await settle()
+  delete s.override['PUT /publish']
+  s.version = 0
+  await publisher.connect(base, ownerKey)
+  gate.release()
+  await publisher.flush()
+  t.not(storedExpiry(values), 1234)
+  t.not(publisher.getStatus().acceptedVersion, 99)
+  t.true(publisher.getStatus().connected)
+})
+
+test('heartbeats that get through do not flip the badge while uploads keep failing', async (t) => {
+  const { s, fetcher } = server()
+  const { storage } = memoryStorage()
+  const publisher = new LivePublisher(storage, fetcher, fakeEvents().events)
+  t.teardown(publisher.start())
+  await publisher.connect(base, ownerKey)
+  await publisher.flush()
+  s.override['PUT /publish'] = () => {
+    throw new Error('upload path down')
+  }
+  publisher.capture(null, 0)
+  await publisher.flush()
+  t.false(publisher.getStatus().reachable)
+  const seen: boolean[] = []
+  const off = publisher.subscribe(() => seen.push(publisher.getStatus().reachable))
+  for (let i = 0; i < 3; i++) {
+    await publisher.ping()
+    await publisher.flush()
+  }
+  off()
+  t.true(s.beats >= 3)
+  t.false(seen.includes(true), 'reachable flickered back on between failed uploads')
+  // The upload itself getting through is what restores it.
+  delete s.override['PUT /publish']
+  await publisher.ping()
+  await publisher.flush()
+  t.true(publisher.getStatus().reachable)
+  t.is(publisher.getStatus().acceptedVersion, publisher.getStatus().version)
+})
+
+/** One tab whose session ended involuntarily, then another tab that connects afresh. */
+async function endedThenOtherTab() {
+  const { s, fetcher } = server()
+  const { values, storage } = memoryStorage()
+  let requests = 0
+  const counted: typeof fetch = (input, init) => {
+    requests++
+    return fetcher(input, init)
+  }
+  const a = new LivePublisher(storage, counted, fakeEvents().events)
+  await a.connect(base, ownerKey)
+  await a.flush()
+  s.token = 'rotated' // A's session is revoked
+  await a.ping()
+  const b = new LivePublisher(storage, counted, fakeEvents().events)
+  await b.connect(base, ownerKey) // the service issues `rotated` to the new session
+  await b.flush()
+  return { s, values, a, b, requests: () => requests }
+}
+
+test('Dismiss is local: it never touches a session another tab started since', async (t) => {
+  const { values, a, b, requests } = await endedThenOtherTab()
+  t.true(a.getStatus().ended)
+  const record = values.get(KEY)
+  const before = requests()
+  a.dismiss()
+  await a.flush()
+  t.false(a.getStatus().ended)
+  t.is(requests(), before, 'Dismiss made a request')
+  t.is(values.get(KEY), record)
+  await b.ping()
+  t.true(b.getStatus().connected)
+  t.false(b.getStatus().ended)
+  t.is(b.getStatus().message, 'Live · version 1')
+})
+
+test('an ended tab that sees another tab sharing says so, and does not claim it', async (t) => {
+  const { s, a, b } = await endedThenOtherTab()
+  t.true(a.getStatus().ended)
+  const claims = s.claims
+  await a.tick()
+  await a.flush()
+  t.false(a.getStatus().ended)
+  t.true(a.getStatus().otherTab)
+  t.is(s.claims, claims)
+  t.true(b.getStatus().connected)
+  t.is(b.getStatus().message, 'Live · version 1')
+})
+
+test('starting an ended tab while another tab shares clears the ended notice', async (t) => {
+  const { s, a } = await endedThenOtherTab()
+  const claims = s.claims
+  t.teardown(a.start())
+  await a.flush()
+  t.false(a.getStatus().ended)
+  t.true(a.getStatus().otherTab)
+  t.is(s.claims, claims)
+})
+
+test('an older service without expiresAt leaves the expiry as it was', async (t) => {
+  const { s, fetcher } = server()
+  const { values, storage } = memoryStorage()
+  const publisher = new LivePublisher(storage, fetcher, fakeEvents().events)
+  await publisher.connect(base, ownerKey)
+  await publisher.flush()
+  const initial = storedExpiry(values)
+  await publisher.ping()
+  publisher.capture(null, 0)
+  await publisher.flush()
+  t.is(storedExpiry(values), initial)
+  // A malformed value is ignored the same way.
+  s.override['POST /heartbeat'] = () =>
+    new Response(JSON.stringify({ acceptedVersion: s.version, expiresAt: 'soon' }), {
+      status: 200,
+    })
+  await publisher.ping()
+  t.is(storedExpiry(values), initial)
+})
+
+test('a later expiry never overwrites a record another tab now holds', async (t) => {
+  const { s, fetcher } = server()
+  const { values, storage } = memoryStorage()
+  const gate = deferred()
+  let hold = false
+  const slow: typeof fetch = async (input, init) => {
+    if (init?.method === 'PUT' && hold) await gate.promise
+    return fetcher(input, init)
+  }
+  const publisher = new LivePublisher(storage, slow, fakeEvents().events)
+  await publisher.connect(base, ownerKey)
+  await publisher.flush()
+  hold = true
+  s.expiresAt = Date.now() + 5e7
+  publisher.capture(null, 0) // saved, then held in flight
+  // Another tab claims in storage while the upload is out; the server accepts it.
+  const theirs = JSON.stringify({ ...JSON.parse(values.get(KEY)!), writerId: 'other-tab' })
+  values.set(KEY, theirs)
+  gate.release()
+  await publisher.flush()
+  t.is(values.get(KEY), theirs)
+  t.true(publisher.getStatus().otherTab)
+  t.false(publisher.getStatus().connected)
+})
+
+test('table context: read at capture time, optional, and a fault never stops sharing', async (t) => {
+  const { s, fetcher } = server()
+  const { storage } = memoryStorage()
+  const publisher = new LivePublisher(storage, fetcher, fakeEvents().events)
+  await publisher.connect(base, ownerKey)
+  const hand = headsUp(42)
+  publisher.capture(hand, 1)
+  await publisher.flush()
+  t.is(s.snapshots.at(-1)!.hand!.table, null)
+
+  let status: 'playing' | 'busted' = 'playing'
+  const remove = publisher.setTableContext(() => ({
+    venue: 'The Back Room',
+    format: 'tournament',
+    blindLevel: 1,
+    status,
+    place: status === 'busted' ? 2 : null,
+    scoreHands: null,
+    players: { ai: { style: 'Loose', reads: ['Plays most hands'] } },
+  }))
+  publisher.capture(hand, 1)
+  await publisher.flush()
+  t.like(s.snapshots.at(-1)!.hand!.table as object, { venue: 'The Back Room', status: 'playing' })
+  const players = s.snapshots.at(-1)!.hand!.players as { style: string; reads: string[] }[]
+  t.deepEqual(
+    players.map((player) => player.reads),
+    [[], ['Plays most hands']],
+  )
+
+  // The run ends with no new capture: refresh republishes the same hand.
+  status = 'busted'
+  const puts = s.puts.length
+  publisher.refresh(headsUp(42)) // a different hand object: not the last capture
+  await publisher.flush()
+  t.is(s.puts.length, puts)
+  publisher.refresh(hand)
+  await publisher.flush()
+  t.is(s.puts.length, puts + 1)
+  t.like(s.snapshots.at(-1)!.hand!.table as object, { status: 'busted', place: 2 })
+  t.true(String(s.snapshots.at(-1)!.hand!.brief).endsWith('You are out in 2nd.'))
+
+  remove()
+  publisher.setTableContext(() => {
+    throw new Error('store fault')
+  })
+  publisher.capture(hand, 1)
+  await publisher.flush()
+  t.true(publisher.getStatus().connected)
+  t.is(s.snapshots.at(-1)!.hand!.table, null)
+  // No hand, no table.
+  publisher.capture(null, 0)
+  publisher.refresh(null)
+  await publisher.flush()
+  t.is(s.snapshots.at(-1)!.hand, null)
 })

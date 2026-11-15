@@ -9,6 +9,7 @@ import { haptics } from '@/lib/haptics'
 import { inApp } from '@/lib/nativeApp'
 import { sound } from '@/lib/sound'
 import { livePublisher } from '@/lib/liveCoaching/publisher'
+import { startTableContext } from '@/lib/liveCoaching/tableContext'
 
 /**
  * One-time client boot work, mounted from the root layout:
@@ -25,6 +26,8 @@ import { livePublisher } from '@/lib/liveCoaching/publisher'
 export function AppBoot() {
   useEffect(() => {
     const stopSharing = livePublisher.start()
+    // The table around the shared hand: venue, blind level, run status, reads.
+    const stopTableContext = startTableContext()
     void navigator.storage?.persist?.().catch(() => {})
 
     const profile = useProfile.getState()
@@ -69,6 +72,7 @@ export function AppBoot() {
     return () => {
       sound.onPlay(null)
       stopSharing()
+      stopTableContext()
     }
   }, [])
   return null

@@ -6,7 +6,8 @@ import { bearer, bodyText, hash, json, noCache, READ_META, secretMatches } from 
 export { LiveState } from './session.mjs'
 
 const READ = 'hand:read'
-// One line per request to these paths, for an ad-hoc `wrangler tail`.
+// One line per request to these paths, for an ad-hoc `wrangler tail`; any other
+// path logs only when it failed with an exception.
 const LOGGED = new Set(['/mcp', '/mcp/current', '/token', '/register'])
 const RPC_METHODS = new Set([
   'initialize',
@@ -19,6 +20,12 @@ const RPC_METHODS = new Set([
 // hands unchanged to the API handler. Unlike a header, a client cannot set it.
 // Holds only timings and freshness figures: never cards, tokens or bodies.
 const traces = new WeakMap()
+// An exception's class name only, never its message or stack: V8's JSON.parse
+// messages quote the input, and other messages can carry URLs or values.
+const errorClass = (error) => {
+  const name = error?.constructor?.name
+  return typeof name === 'string' && /^\w{1,64}$/.test(name) ? name : 'unknown'
+}
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const object = (env) => env.LIVE_STATE.get(env.LIVE_STATE.idFromName('owner'))
 const internal = (env, path, request) =>
@@ -91,7 +98,7 @@ async function authorize(request, env) {
 const tool = {
   name: 'get_current_hand',
   description:
-    "Fetch the latest actual Pip poker state. Call again on every game question or follow-up. Check active, stale, pending and timestamps. If stale or inactive, say so; never imply cached cards are current. Otherwise lead your answer with state.hand.brief, the game's one-sentence summary; hero.toCall, hero.potOdds and hero.stack give the price, and action-history entries carry name and position. hero.lastEquity is an earlier turn's estimate, not current equity. After a showdown, hand.result.shownHands lists the hands turned face up; opponents' cards are never present at any other time, so never guess them. Explain the state; do not play moves. timing.serverMs is the server's own execution time and readAt is when the server answered, so a long wait with a small serverMs happened outside the server.",
+    "Fetch the latest actual Pip poker state. Call again on every game question or follow-up. Check active, stale, pending and timestamps. If stale or inactive, say so; never imply cached cards are current. If state.hand.table.status says the hero busted or won, the run is over: say so instead of advising a live decision. Otherwise lead your answer with state.hand.brief, the game's one-sentence summary; hero.toCall, hero.potOdds and hero.stack give the price, and action-history entries carry name and position. Trust hero.handName, the made hand as the table names it (null preflop); do not re-derive it from the cards. hero.lastEquity is an earlier turn's estimate, not current equity. For advice about an opponent, use their players[].style and reads, the player's own observed reads; if reads is empty there is no read yet, so do not invent tendencies. After a showdown, hand.result.shownHands lists the hands turned face up; opponents' cards are never present at any other time, so never guess them. Explain the state; do not play moves. timing.serverMs is the server's own execution time and readAt is when the server answered, so a long wait with a small serverMs happened outside the server.",
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   annotations: {
     readOnlyHint: true,
@@ -275,7 +282,10 @@ const createProvider = (publicUrl) =>
     // Owner-key rotation still revokes at once: every read re-checks the epoch.
     accessTokenTTL: 60 * 60,
     refreshTokenTTL: 30 * 24 * 60 * 60,
-    // No request bodies, card data, tokens, or OAuth callback URLs in logs.
+    // No request bodies, card data, tokens, or OAuth callback URLs in logs. These
+    // are OAuth error responses, not exceptions, and the hook is handed the request
+    // only in some cases, so it cannot be tied to a log line; the logged status
+    // still shows them on the endpoints that log.
     onError: () => {},
   })
 
@@ -294,13 +304,13 @@ export default {
     const path = new URL(request.url).pathname
     let status = 500
     try {
-      const response = await serve(request, env, ctx)
+      const response = await serve(request, env, ctx, trace)
       status = response.status
       return response
     } finally {
-      if (LOGGED.has(path)) {
+      if (LOGGED.has(path) || trace.error) {
         // Allow-listed fields only: no cards, snapshot, tokens, Authorization, cookies,
-        // query string, body, client ID or IP address.
+        // query string, body, client ID, IP address or error message.
         console.info(
           JSON.stringify({
             event: 'pip_live_request',
@@ -310,6 +320,7 @@ export default {
             rpcMethod: trace.rpcMethod,
             tool: trace.tool,
             status,
+            error: trace.error,
             ms: Date.now() - trace.start,
             colo: request.cf?.colo ?? null,
             hasBearer: /^Bearer\s/i.test(request.headers.get('Authorization') ?? ''),
@@ -321,7 +332,7 @@ export default {
   },
 }
 
-async function serve(request, env, ctx) {
+async function serve(request, env, ctx, trace) {
   try {
     if (!env.PUBLIC_URL || !env.OWNER_KEY || env.OWNER_KEY.length < 32)
       return json({ error: 'Service not configured' }, 503)
@@ -350,7 +361,8 @@ async function serve(request, env, ctx) {
       headers.set('Vary', 'Origin')
     }
     return new Response(response.body, { status: response.status, headers })
-  } catch {
+  } catch (error) {
+    trace.error = errorClass(error)
     return json({ error: 'Request failed; check configuration or retry' }, 400)
   }
 }

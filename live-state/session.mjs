@@ -1,15 +1,23 @@
 import { bearer, bodyText, hash, json, READ_META, randomSecret } from './http.mjs'
 
+// A session expires 12 hours after its last accepted heartbeat, upload or claim,
+// and never later than 7 days after it was created.
 const SESSION_MS = 12 * 60 * 60 * 1000
-// Heartbeats refresh lastSeenAt in memory; storage gets it at most this often.
+const MAX_SESSION_MS = 7 * 24 * 60 * 60 * 1000
+// Heartbeats refresh lastSeenAt and expiresAt in memory; storage gets them at most
+// this often.
 const SEEN_PERSIST_MS = 60_000
 // Storage keys. The snapshot lives apart from the session metadata, so heartbeats
 // and claims never rewrite it.
 const META = 'meta'
 const STATE = 'state'
-// The original single-record format. Sessions last at most 12 hours, so a leftover
-// record is treated as no session and deleted rather than migrated.
+// The original single-record format. Those sessions lasted at most 12 hours, so a
+// leftover record is treated as no session and deleted rather than migrated.
 const LEGACY = 'session'
+
+const slide = (session, now) => {
+  session.expiresAt = Math.min(now + SESSION_MS, session.createdAt + MAX_SESSION_MS)
+}
 
 // Only the outer Worker can reach this object. All browser reads go through
 // OAuth; all browser writes need the session's separate random publishing key.
@@ -54,6 +62,13 @@ export class LiveState {
       const stored = await this.ctx.storage.get([META, STATE, LEGACY])
       const meta = stored.get(META)
       if (meta) {
+        // Stored before expiry slid: such a session never moved its expiry, so it
+        // was created exactly 12 hours before it.
+        meta.createdAt ??= meta.expiresAt - SESSION_MS
+        // Heartbeats save at most once a minute, so activity since the last save may
+        // have moved the expiry up to that much later than stored. Assume it did,
+        // so a restart (or the alarm after one) never drops a live session early.
+        meta.expiresAt = Math.min(meta.expiresAt + SEEN_PERSIST_MS, meta.createdAt + MAX_SESSION_MS)
         this.meta = meta
         this.state = stored.get(STATE) ?? null
         this.savedSeenAt = meta.lastSeenAt
@@ -126,6 +141,7 @@ export class LiveState {
         writerId,
         ownerEpoch,
         tokenHash: await hash(token),
+        createdAt: now,
         expiresAt: now + SESSION_MS,
         version: 0,
         expectedVersion: 0,
@@ -153,8 +169,12 @@ export class LiveState {
       if (typeof writerId !== 'string' || writerId.length > 100)
         return json({ error: 'Invalid writer' }, 400)
       session.writerId = writerId
+      slide(session, now)
       await this.saveMeta()
-      return json({ version: Math.max(session.version, session.expectedVersion) })
+      return json({
+        version: Math.max(session.version, session.expectedVersion),
+        expiresAt: session.expiresAt,
+      })
     }
     if (request.headers.get('X-Pip-Writer') !== session.writerId) {
       return json(
@@ -174,8 +194,10 @@ export class LiveState {
         expectedVersion !== session.expectedVersion || now - this.savedSeenAt >= SEEN_PERSIST_MS
       session.expectedVersion = expectedVersion
       session.lastSeenAt = now
+      // The slid expiry rides on the same at-most-once-a-minute save (see load()).
+      slide(session, now)
       if (persist) await this.saveMeta()
-      return json({ acceptedVersion: session.version })
+      return json({ acceptedVersion: session.version, expiresAt: session.expiresAt })
     }
     if (path !== '/publish') return json({ error: 'Not found' }, 404)
     if (
@@ -200,14 +222,21 @@ export class LiveState {
     session.expectedVersion = Math.max(session.expectedVersion, data.version)
     session.receivedAt = new Date(now).toISOString()
     session.lastSeenAt = now
+    slide(session, now)
     this.savedSeenAt = now
     // One atomic write of both keys.
     await this.ctx.storage.put({ [STATE]: data, [META]: session })
-    return json({ acceptedVersion: session.version, receivedAt: session.receivedAt })
+    return json({
+      acceptedVersion: session.version,
+      receivedAt: session.receivedAt,
+      expiresAt: session.expiresAt,
+    })
   }
 
   async alarm() {
-    // An old alarm can be retried after the owner has created a newer session.
+    // The alarm is set for the expiry at creation; activity since then slides the
+    // expiry, so a live session just re-arms it for its current expiry. An old alarm
+    // can also be retried after the owner has created a newer session.
     await this.ctx.blockConcurrencyWhile(async () => {
       await this.load(Date.now())
       if (this.meta) await this.ctx.storage.setAlarm(this.meta.expiresAt)

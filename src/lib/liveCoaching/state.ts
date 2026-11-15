@@ -8,7 +8,41 @@ import {
   showsHoleCards,
   type HandState,
 } from '@/lib/poker/engine'
+import { evaluateHand, handPhrase, type EvaluatedHand } from '@/lib/poker/handEval'
+import { ordinal } from '@/lib/recap'
 import { formatWinPct } from '@/lib/utils'
+
+/** The run's state as the game store names it (`GameStatus`). */
+export type LiveRunStatus =
+  | 'idle'
+  | 'playing'
+  | 'handover'
+  | 'busted'
+  | 'won'
+  | 'watching'
+  | 'scored'
+
+/**
+ * What the player can see about the table and the run around the hand: the
+ * header (venue, blinds level, "Hand N of M") and, per seat, what opening that
+ * player shows (their style line and "Your reads"). Supplied by the app at
+ * capture time (`tableContext.ts`); absent in Node, where no store exists.
+ */
+export interface LiveTableContext {
+  /** The venue's display name. */
+  venue: string
+  /** `score` is a quick game played for a score (`Venue.scoreHands`); `cash` a ring table. */
+  format: 'tournament' | 'cash' | 'score'
+  /** 1-based, as the header's "L2". */
+  blindLevel: number
+  status: LiveRunStatus
+  /** Tournament finishing place once the run is over (1 = won it); otherwise null. */
+  place: number | null
+  /** Hands a score game deals ("Hand N of M"); null at every other table. */
+  scoreHands: number | null
+  /** Per seat id: exactly what that player's dialog shows. */
+  players: Record<string, { style: string | null; reads: string[] }>
+}
 
 export interface LiveSnapshotContext {
   sessionId: string
@@ -23,6 +57,8 @@ export interface LiveSnapshotContext {
    * publisher so "how's my hand?" during an AI turn still has a number.
    */
   lastEquity?: { equity: number; street: string } | null
+  /** The table around the hand, read by the publisher's context provider. */
+  table?: LiveTableContext | null
 }
 
 const validEquity = (value: unknown): value is number =>
@@ -43,6 +79,20 @@ export function heroTurnEquity(
 }
 
 const pct = (fraction: number) => `${Math.round(fraction * 100)}%`
+
+/**
+ * The hero's made hand, by the felt's own rule (`useHandLabel` in
+ * table/parts.tsx): from five cards on, never the preflop nickname, and
+ * nothing at all if the evaluator refuses the cards.
+ */
+function heroMadeHand(hand: HandState, hero: HandState['players'][number] | undefined) {
+  if (!hero || hero.hole.length < 2 || hero.hole.length + hand.community.length < 5) return null
+  try {
+    return evaluateHand(hero.hole, hand.community, hand.variant)
+  } catch {
+    return null
+  }
+}
 
 function positions(hand: HandState): Map<string, string> {
   // Include folded/all-in players: positions belong to the original deal.
@@ -97,6 +147,8 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
           }
         : null
   const pot = potSize(hand)
+  const made = heroMadeHand(hand, hero)
+  const table = context.table ?? null
   const shownHands = revealedHands(hand, context.heroId, seatPositions)
   // Price to call only on the hero's own turn: the engine's call amount,
   // already capped at the hero's stack.
@@ -137,6 +189,7 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
             playerId: hero.id,
             position: seatPositions.get(hero.id) ?? null,
             holeCards: hero.hole.map(cardToString),
+            handName: made?.name ?? null,
             equity,
             equityDisplay: formatWinPct(equity),
             lastEquity,
@@ -158,6 +211,10 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
         stack: player.stack,
         committedThisStreet: player.committedThisStreet,
         committedThisHand: player.committedThisHand,
+        // What opening this player at the table shows: the style line and
+        // "Your reads", never the AI's hidden profile. Nobody reads the hero.
+        style: table?.players[player.id]?.style ?? null,
+        reads: player.id === context.heroId ? [] : [...(table?.players[player.id]?.reads ?? [])],
       })),
       // Remaining chips behind, excluding chips already committed. Per-opponent
       // values avoid inventing a single effective stack for a multiway pot.
@@ -200,6 +257,16 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
             shownHands,
           }
         : null,
+      table: table
+        ? {
+            venue: table.venue,
+            format: table.format,
+            blindLevel: table.blindLevel,
+            status: table.status,
+            place: table.place,
+            scoreHands: table.scoreHands,
+          }
+        : null,
       brief: brief(hand, {
         handNo: context.handNo,
         complete,
@@ -213,6 +280,8 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
         equity,
         lastEquity,
         shownHands,
+        made,
+        table,
       }),
     },
   }
@@ -276,6 +345,8 @@ function brief(
     equity: number | null
     lastEquity: { equityDisplay: string; street: string } | null
     shownHands: ShownHand[]
+    made: EvaluatedHand | null
+    table: LiveTableContext | null
   },
 ): string {
   const { hero, complete } = facts
@@ -306,7 +377,13 @@ function brief(
         `${shown.playerId === hero?.id ? (i ? 'you' : 'You') : shown.name} showed ${shown.holeCards.join(' ')}`,
     )
     if (shown.length) parts.push(`${shown.join(', ')}.`)
+    const run = runClause(facts.table, hero)
+    if (run) parts.push(run)
     return parts.join(' ')
+  }
+  if (facts.made && hero && hero.status !== 'folded') {
+    const phrase = handPhrase(facts.made)
+    parts.push(phrase ? `You have ${phrase}.` : `Your hand: ${facts.made.name}.`)
   }
   parts.push(`Pot ${facts.pot}.`)
   if (facts.actor && facts.actor === hero?.id) {
@@ -324,7 +401,30 @@ function brief(
     parts.push(
       `Last estimate ${facts.lastEquity.equityDisplay} ${facts.lastEquity.street === 'preflop' ? 'preflop' : `on the ${facts.lastEquity.street}`}.`,
     )
+  const run = runClause(facts.table, hero)
+  if (run) parts.push(run)
   return parts.join(' ')
+}
+
+/** How the run stands once it is over; null while it goes on. */
+function runClause(
+  table: LiveTableContext | null,
+  hero: HandState['players'][number] | undefined,
+): string | null {
+  if (!table) return null
+  const place = table.place && table.place > 1 ? ordinal(table.place) : null
+  switch (table.status) {
+    case 'won':
+      return 'You won the table.'
+    case 'busted':
+      return place ? `You are out in ${place}.` : 'You are out of chips.'
+    case 'watching':
+      return place ? `You are out in ${place}, watching the table play out.` : null
+    case 'scored':
+      return hero ? `The game is over: you finish with ${hero.stack} chips.` : 'The game is over.'
+    default:
+      return null
+  }
 }
 
 export type LiveSnapshot = ReturnType<typeof liveSnapshot>

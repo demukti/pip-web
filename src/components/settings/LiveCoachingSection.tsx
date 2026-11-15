@@ -24,6 +24,13 @@ export function LiveCoachingSection() {
       <p role="status" className="mt-2 text-sm">
         {status.message}
       </p>
+      {/* An involuntary end shows on the table until reconnecting; this puts it
+          away, locally only (never a request another tab's session could feel). */}
+      {status.ended && !status.connected && !status.resuming && (
+        <Button className="mt-2" size="sm" variant="ghost" onClick={() => livePublisher.dismiss()}>
+          Dismiss
+        </Button>
+      )}
       {status.connected ? (
         <Button className="mt-3" variant="outline" onClick={() => void livePublisher.disconnect()}>
           Stop sharing
@@ -85,8 +92,9 @@ export function LiveCoachingSection() {
             />
           </label>
           <p className="text-xs text-muted-foreground">
-            This browser stays connected for up to 12 hours, across new tabs and restarts. The owner
-            key is never saved. Starting another session replaces the previous one.
+            This browser stays connected while you keep playing, across new tabs and restarts: until
+            12 hours after your last activity, and 7 days at most. The owner key is never saved.
+            Starting another session replaces the previous one.
           </p>
           <Button disabled={busy} type="submit">
             {busy ? 'Connecting…' : 'Start sharing'}

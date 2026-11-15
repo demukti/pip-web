@@ -24,8 +24,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # No test gate here: `pnpm test:all` takes ~11 minutes on a runner and is
-      # run locally before every push. Deploys only.
+      # The full gate (`pnpm test:all`, ~11 minutes on a runner) is still run
+      # locally before every push. These are the seconds-long checks that guard
+      # this deploy: types, and the add-on's own tests.
+      - name: Type check
+        run: pnpm test:types
+      - name: Live coaching tests
+        run: pnpm ava tests/live*.test.ts
       - name: Build static game
         env:
           NEXT_PUBLIC_LIVE_STATE_URL: https://pip-live-state.tizav.workers.dev

@@ -1,6 +1,7 @@
 import test from 'ava'
-import { liveSnapshot } from '@/lib/liveCoaching/state'
+import { liveSnapshot, type LiveTableContext } from '@/lib/liveCoaching/state'
 import { mulberry32, cardToString } from '@/lib/poker/cards'
+import { evaluateHand, handPhrase } from '@/lib/poker/handEval'
 import {
   startHand,
   applyAction,
@@ -320,7 +321,7 @@ test('brief: facing a bet on the flop', (t) => {
   const board = hand.community.map(cardToString).join(' ')
   t.is(
     liveSnapshot(hand, { ...context, handNo: 12, displayedEquity: 0.5 }).hand!.brief,
-    `Hand 12, flop. You are BTN with ${a} ${b}, 190 behind. Board ${board}. Pot 70. Your turn: 20 to call, pot odds 22%. Equity 50%.`,
+    `Hand 12, flop. You are BTN with ${a} ${b}, 190 behind. Board ${board}. You have a pair. Pot 70. Your turn: 20 to call, pot odds 22%. Equity 50%.`,
   )
 })
 
@@ -384,4 +385,129 @@ test('lastEquity keeps the latest hero-turn estimate separately from equity', (t
     { equity: NaN, street: 'flop' },
   ])
     t.is(liveSnapshot(aiTurn, { ...context, lastEquity: bad }).hand!.hero!.lastEquity, null)
+})
+
+test('hero.handName names the made hand from the flop on, as the felt does', (t) => {
+  const preflop = deal()
+  t.is(liveSnapshot(preflop, context).hand!.hero!.handName, null)
+  // The preflop nickname ("Pocket Rockets") is the felt's, not a made hand.
+  t.false(liveSnapshot(preflop, context).hand!.brief.includes('You have'))
+  const streets = new Set<string>()
+  playOut(deal(), [], (hand) => {
+    const snapshot = liveSnapshot(hand, context).hand!
+    const hero = hand.players[0]
+    const expected =
+      hand.community.length >= 3 ? evaluateHand(hero.hole, hand.community, hand.variant) : null
+    t.is(snapshot.hero!.handName, expected?.name ?? null)
+    if (expected) t.true(snapshot.brief.includes(`You have ${handPhrase(expected)}.`))
+    streets.add(hand.street)
+  })
+  t.deepEqual([...streets], ['preflop', 'flop', 'turn', 'river'])
+})
+
+test('hero.handName: no brief clause once the hero folds or the hand is over', (t) => {
+  // Hero folds the button; the blinds see a flop.
+  let hand = applyAction(deal(), { type: 'fold' })
+  hand = applyAction(hand, { type: 'call' })
+  hand = applyAction(hand, { type: 'check' })
+  t.is(hand.street, 'flop')
+  const folded = liveSnapshot(hand, context).hand!
+  t.is(typeof folded.hero!.handName, 'string')
+  t.false(folded.brief.includes('You have'))
+  const done = liveSnapshot(playOut(deal()), context).hand!
+  t.is(typeof done.hero!.handName, 'string')
+  t.false(done.brief.includes('You have'))
+})
+
+test('Mystery Card: no made hand is named while a hole card is face down', (t) => {
+  let checked = 0
+  playOut(deal({ mystery: true }), [], (hand) => {
+    if (hand.players[0].hole.length >= 2) return
+    t.is(liveSnapshot(hand, context).hand!.hero!.handName, null)
+    checked++
+  })
+  t.true(checked > 0)
+})
+
+const table = (over: Partial<LiveTableContext> = {}): LiveTableContext => ({
+  venue: 'The Back Room',
+  format: 'tournament',
+  blindLevel: 2,
+  status: 'playing',
+  place: null,
+  scoreHands: null,
+  players: {
+    hero: { style: null, reads: ['Should never be sent'] },
+    ai1: { style: 'Tight and patient', reads: ['Waits for real hands', 'Folds under pressure'] },
+    ai2: { style: null, reads: [] },
+  },
+  ...over,
+})
+
+test('players carry the style line and reads the table shows; none without a context', (t) => {
+  const bare = liveSnapshot(deal(), context).hand!
+  t.is(bare.table, null)
+  for (const player of bare.players) {
+    t.is(player.style, null)
+    t.deepEqual(player.reads, [])
+  }
+  const result = liveSnapshot(deal(), { ...context, table: table() }).hand!
+  t.deepEqual(
+    result.players.map((player) => [player.playerId, player.style, player.reads]),
+    [
+      // Nobody reads the hero, whatever the context says.
+      ['hero', null, []],
+      ['ai1', 'Tight and patient', ['Waits for real hands', 'Folds under pressure']],
+      ['ai2', null, []],
+    ],
+  )
+})
+
+test('hand.table: venue, format, level, status and place, and nothing else', (t) => {
+  const extended = {
+    ...table({ status: 'handover' }),
+    ai: { hiddenSkill: 0.937531, hiddenLooseness: 0.4 },
+    players: {
+      ai1: { style: 'Loose', reads: [], ai: { hiddenSkill: 0.937531 }, form: 'hidden-form' },
+    },
+  } as unknown as LiveTableContext
+  const snapshot = liveSnapshot(deal(), { ...context, table: extended })
+  t.deepEqual(snapshot.hand!.table, {
+    venue: 'The Back Room',
+    format: 'tournament',
+    blindLevel: 2,
+    status: 'handover',
+    place: null,
+    scoreHands: null,
+  })
+  const encoded = JSON.stringify(snapshot)
+  for (const hidden of ['hiddenSkill', 'hiddenLooseness', '0.937531', 'hidden-form'])
+    t.false(encoded.includes(hidden), hidden)
+})
+
+test('brief: a finished run says so; a run in progress says nothing', (t) => {
+  const done = playOut(deal())
+  const brief = (over: Partial<LiveTableContext>) =>
+    liveSnapshot(done, { ...context, table: table(over) }).hand!.brief
+  t.true(brief({ status: 'busted', place: 3 }).endsWith(' You are out in 3rd.'))
+  t.true(brief({ status: 'won', place: 1 }).endsWith(' You won the table.'))
+  t.true(
+    brief({ status: 'busted', place: null, format: 'cash' }).endsWith(' You are out of chips.'),
+  )
+  t.true(
+    brief({ status: 'scored', format: 'score', scoreHands: 10 }).endsWith(
+      ` The game is over: you finish with ${done.players[0].stack} chips.`,
+    ),
+  )
+  const plain = liveSnapshot(done, context).hand!.brief
+  for (const status of ['playing', 'handover'] as const) t.is(brief({ status }), plain)
+  // Watching the rest after busting: the hero is out of the hand being played.
+  const watching = liveSnapshot(deal(), {
+    ...context,
+    heroId: 'nobody',
+    table: table({ status: 'watching', place: 4 }),
+  }).hand!.brief
+  t.true(watching.endsWith(' You are out in 4th, watching the table play out.'))
+  for (const status of ['busted', 'won', 'scored', 'watching'] as const)
+    t.false(/\$|dollar|usd|€|£/i.test(brief({ status, place: 2 })))
 })
