@@ -24,7 +24,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test:all
+      # No test gate here: `pnpm test:all` takes ~11 minutes on a runner and is
+      # run locally before every push. Deploys only.
       - name: Build static game
         env:
           NEXT_PUBLIC_LIVE_STATE_URL: https://pip-live-state.tizav.workers.dev

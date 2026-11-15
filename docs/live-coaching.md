@@ -253,8 +253,10 @@ or tool metadata refresh is needed; the game client supplies the new fields.
 ## Automated deployment
 
 `.github/workflows/deploy-pip-tutor.yaml` runs on main pushes or manual dispatch
-only when `PIP_TUTOR_ENABLED=true`. It installs locked dependencies, runs all gates,
-builds the static game, deploys the state Worker and deploys Pages. Configure:
+only when `PIP_TUTOR_ENABLED=true`. It installs locked dependencies, builds the
+static game, deploys the state Worker and deploys Pages. It does not run the test
+gate (about 11 minutes on a runner), so run `pnpm test:all` locally before pushing.
+Configure:
 
 - Repository secrets `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. Use an API
   token scoped to this account with Workers Scripts Edit, Workers KV Storage Edit
