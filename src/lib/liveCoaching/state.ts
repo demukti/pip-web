@@ -12,7 +12,31 @@ export interface LiveSnapshotContext {
   heroId: string
   /** Exact estimate already computed for Pip's odds panel, never recomputed here. */
   displayedEquity?: number | null
+  /**
+   * The most recent hero-turn estimate earlier in THIS hand, remembered by the
+   * publisher so "how's my hand?" during an AI turn still has a number.
+   */
+  lastEquity?: { equity: number; street: string } | null
 }
+
+const validEquity = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+
+/**
+ * The estimate, when it is the hero's turn in an unfinished hand and the value
+ * is a probability; otherwise null. Shared with the publisher, which remembers
+ * it as `lastEquity`.
+ */
+export function heroTurnEquity(
+  hand: HandState,
+  heroId: string,
+  estimate: number | null | undefined,
+): number | null {
+  if (isHandComplete(hand) || hand.players[hand.toActIndex]?.id !== heroId) return null
+  return validEquity(estimate) ? estimate : null
+}
+
+const pct = (fraction: number) => `${Math.round(fraction * 100)}%`
 
 function positions(hand: HandState): Map<string, string> {
   // Include folded/all-in players: positions belong to the original deal.
@@ -54,16 +78,23 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
   const complete = isHandComplete(hand)
   const actor = complete ? null : (hand.players[hand.toActIndex]?.id ?? null)
   const legal = actor ? legalActions(hand) : null
-  const estimate = context.displayedEquity
-  const equity =
-    hero &&
-    actor === hero.id &&
-    typeof estimate === 'number' &&
-    Number.isFinite(estimate) &&
-    estimate >= 0 &&
-    estimate <= 1
-      ? estimate
-      : null
+  const equity = hero ? heroTurnEquity(hand, hero.id, context.displayedEquity) : null
+  const remembered = context.lastEquity
+  const lastEquity =
+    equity !== null
+      ? { equity, equityDisplay: formatWinPct(equity), street: hand.street as string }
+      : remembered && validEquity(remembered.equity) && typeof remembered.street === 'string'
+        ? {
+            equity: remembered.equity,
+            equityDisplay: formatWinPct(remembered.equity),
+            street: remembered.street,
+          }
+        : null
+  const pot = potSize(hand)
+  // Price to call only on the hero's own turn: the engine's call amount,
+  // already capped at the hero's stack.
+  const toCall = hero && legal && actor === hero.id ? legal.callAmount : null
+  const potOdds = toCall !== null && toCall > 0 ? toCall / (pot + toCall) : null
   const blindPosts = hand.players.flatMap((player) => {
     const position = seatPositions.get(player.id)
     const amount =
@@ -101,12 +132,16 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
             holeCards: hero.hole.map(cardToString),
             equity,
             equityDisplay: formatWinPct(equity),
+            lastEquity,
+            stack: hero.stack,
+            toCall,
+            potOdds,
           }
         : null,
       communityCards: hand.community.map(cardToString),
       // The engine's potSize is contributions across all streets. After
       // completion it describes the contested pot, which has been awarded.
-      pot: potSize(hand),
+      pot,
       potAwarded: complete,
       players: hand.players.map((player) => ({
         playerId: player.id,
@@ -141,6 +176,8 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
         street: action.street,
         type: action.type,
         committedTo: action.to,
+        name: hand.players.find((player) => player.id === action.playerId)?.name ?? null,
+        position: seatPositions.get(action.playerId) ?? null,
       })),
       // Public results only. Never include evaluations, which can reveal cards
       // beyond what was visible, or the review format's all-player hole array.
@@ -154,8 +191,85 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
             })),
           }
         : null,
+      brief: brief(hand, {
+        handNo: context.handNo,
+        complete,
+        actor,
+        hero,
+        heroPosition: hero ? (seatPositions.get(hero.id) ?? null) : null,
+        positions: seatPositions,
+        pot,
+        toCall,
+        potOdds,
+        equity,
+        lastEquity,
+      }),
     },
   }
+}
+
+/**
+ * One plain-English summary for a voice assistant, built only from values the
+ * snapshot already carries. Chip counts are bare numbers: play money, never a
+ * currency.
+ */
+function brief(
+  hand: HandState,
+  facts: {
+    handNo: number
+    complete: boolean
+    actor: string | null
+    hero: HandState['players'][number] | undefined
+    heroPosition: string | null
+    positions: Map<string, string>
+    pot: number
+    toCall: number | null
+    potOdds: number | null
+    equity: number | null
+    lastEquity: { equityDisplay: string; street: string } | null
+  },
+): string {
+  const { hero, complete } = facts
+  const name = (id: string) =>
+    id === hero?.id ? 'You' : (hand.players.find((player) => player.id === id)?.name ?? id)
+  const parts = [`Hand ${facts.handNo}, ${complete ? 'complete' : hand.street}.`]
+  if (!hero || hero.hole.length === 0) parts.push('You are not in this hand.')
+  else {
+    const seat = facts.heroPosition ? `You are ${facts.heroPosition}` : 'You are seated'
+    parts.push(`${seat} with ${hero.hole.map(cardToString).join(' ')}, ${hero.stack} behind.`)
+    if (hero.status === 'folded') parts.push('You folded.')
+    if (!complete && hero.status === 'allin') parts.push('You are all in.')
+  }
+  if (hand.community.length) parts.push(`Board ${hand.community.map(cardToString).join(' ')}.`)
+  if (complete) {
+    const pots = hand.result?.potsAwarded ?? []
+    const won = pots.map((award) => {
+      const winners = award.winners.map(name)
+      return `${winners.join(' and ')} ${winners.length > 1 ? 'split' : 'won'} ${award.amount}`
+    })
+    if (won.length)
+      parts.push(
+        `${won.join('; ')} ${hand.result?.showdown ? 'at showdown' : 'without a showdown'}.`,
+      )
+    return parts.join(' ')
+  }
+  parts.push(`Pot ${facts.pot}.`)
+  if (facts.actor && facts.actor === hero?.id) {
+    parts.push(
+      facts.toCall && facts.potOdds !== null
+        ? `Your turn: ${facts.toCall} to call, pot odds ${pct(facts.potOdds)}.`
+        : 'Your turn, nothing to call.',
+    )
+  } else if (facts.actor) {
+    const position = facts.positions.get(facts.actor)
+    parts.push(`${name(facts.actor)}${position ? ` (${position})` : ''} to act.`)
+  }
+  if (facts.equity !== null) parts.push(`Equity ${pct(facts.equity)}.`)
+  else if (facts.lastEquity && hero && (hero.status === 'active' || hero.status === 'allin'))
+    parts.push(
+      `Last estimate ${facts.lastEquity.equityDisplay} ${facts.lastEquity.street === 'preflop' ? 'preflop' : `on the ${facts.lastEquity.street}`}.`,
+    )
+  return parts.join(' ')
 }
 
 export type LiveSnapshot = ReturnType<typeof liveSnapshot>

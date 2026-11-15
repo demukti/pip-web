@@ -28,6 +28,22 @@ export function LiveCoachingSection() {
         <Button className="mt-3" variant="outline" onClick={() => void livePublisher.disconnect()}>
           Stop sharing
         </Button>
+      ) : status.resuming || status.otherTab ? (
+        <div className="mt-3 flex flex-col gap-3">
+          <p className="text-xs text-muted-foreground">
+            {status.resuming
+              ? 'Your saved session will pick up again as soon as the service can be reached.'
+              : 'Another Pip tab in this browser is sharing. Only one tab shares at a time.'}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {status.otherTab && (
+              <Button onClick={() => void livePublisher.restore()}>Share from this tab</Button>
+            )}
+            <Button variant="outline" onClick={() => void livePublisher.disconnect()}>
+              Stop sharing
+            </Button>
+          </div>
+        </div>
       ) : (
         <form
           className="mt-3 flex flex-col gap-3"
@@ -69,8 +85,8 @@ export function LiveCoachingSection() {
             />
           </label>
           <p className="text-xs text-muted-foreground">
-            Connect once per browser tab. Sessions expire after 12 hours. Starting another session
-            replaces the previous one.
+            This browser stays connected for up to 12 hours, across new tabs and restarts. The owner
+            key is never saved. Starting another session replaces the previous one.
           </p>
           <Button disabled={busy} type="submit">
             {busy ? 'Connecting…' : 'Start sharing'}

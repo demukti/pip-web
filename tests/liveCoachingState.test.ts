@@ -127,3 +127,141 @@ test('a prior-turn estimate is never carried into an AI turn or a finished hand'
   while (!isHandComplete(complete)) complete = applyAction(complete, { type: 'fold' })
   t.is(liveSnapshot(complete, { ...context, displayedEquity: 0.72 }).hand!.hero!.equity, null)
 })
+
+test('hero price fields: stack, engine call amount and pot odds on the hero turn only', (t) => {
+  const preflop = liveSnapshot(deal(), context).hand!
+  t.is(preflop.hero?.stack, 200)
+  t.is(preflop.hero?.toCall, 10)
+  // 10 to call into 15: 10 / (15 + 10).
+  t.is(preflop.hero?.potOdds, 0.4)
+  let hand = applyAction(deal(), { type: 'call' })
+  const aiTurn = liveSnapshot(hand, context).hand!
+  t.is(aiTurn.hero?.stack, 190)
+  t.is(aiTurn.hero?.toCall, null)
+  t.is(aiTurn.hero?.potOdds, null)
+  hand = applyAction(applyAction(hand, { type: 'call' }), { type: 'check' })
+  hand = applyAction(hand, { type: 'check' })
+  hand = applyAction(hand, { type: 'check' })
+  const check = liveSnapshot(hand, context).hand!
+  t.is(check.currentPlayerToAct, 'hero')
+  t.is(check.hero?.toCall, 0)
+  t.is(check.hero?.potOdds, null)
+})
+
+test('pot odds are the call over the pot after calling', (t) => {
+  let hand = applyAction(deal(), { type: 'call' })
+  hand = applyAction(applyAction(hand, { type: 'call' }), { type: 'check' })
+  hand = applyAction(applyAction(hand, { type: 'bet', amount: 20 }), { type: 'call' })
+  const result = liveSnapshot(hand, context).hand!
+  t.is(result.pot, 70)
+  t.is(result.hero?.toCall, legalActions(hand)!.callAmount)
+  t.is(result.hero?.toCall, 20)
+  t.is(result.hero?.potOdds, 20 / 90)
+})
+
+test('action history names each actor and their position', (t) => {
+  let hand = applyAction(deal(), { type: 'call' })
+  hand = applyAction(hand, { type: 'fold' })
+  t.deepEqual(liveSnapshot(hand, context).hand!.actionHistory, [
+    {
+      playerId: 'hero',
+      street: 'preflop',
+      type: 'call',
+      committedTo: 10,
+      name: 'Hero',
+      position: 'BTN',
+    },
+    {
+      playerId: 'ai1',
+      street: 'preflop',
+      type: 'fold',
+      committedTo: 5,
+      name: 'One',
+      position: 'SB',
+    },
+  ])
+})
+
+test('brief: preflop on the hero turn', (t) => {
+  const hand = deal()
+  const [a, b] = hand.players[0].hole.map(cardToString)
+  t.is(
+    liveSnapshot(hand, { ...context, displayedEquity: 0.72 }).hand!.brief,
+    `Hand 1, preflop. You are BTN with ${a} ${b}, 200 behind. Pot 15. Your turn: 10 to call, pot odds 40%. Equity 72%.`,
+  )
+})
+
+test('brief: facing a bet on the flop', (t) => {
+  let hand = applyAction(deal(), { type: 'call' })
+  hand = applyAction(applyAction(hand, { type: 'call' }), { type: 'check' })
+  hand = applyAction(applyAction(hand, { type: 'bet', amount: 20 }), { type: 'call' })
+  const [a, b] = hand.players[0].hole.map(cardToString)
+  const board = hand.community.map(cardToString).join(' ')
+  t.is(
+    liveSnapshot(hand, { ...context, handNo: 12, displayedEquity: 0.5 }).hand!.brief,
+    `Hand 12, flop. You are BTN with ${a} ${b}, 190 behind. Board ${board}. Pot 70. Your turn: 20 to call, pot odds 22%. Equity 50%.`,
+  )
+})
+
+test('brief: completed hands report the public result only', (t) => {
+  let folded = deal()
+  while (!isHandComplete(folded)) folded = applyAction(folded, { type: 'fold' })
+  const [a, b] = folded.players[0].hole.map(cardToString)
+  t.is(
+    liveSnapshot(folded, context).hand!.brief,
+    `Hand 1, complete. You are BTN with ${a} ${b}, 200 behind. You folded. Two won 15 without a showdown.`,
+  )
+  let shown = deal()
+  while (!isHandComplete(shown)) {
+    const legal = legalActions(shown)!
+    shown = applyAction(shown, { type: legal.canCheck ? 'check' : 'call' })
+  }
+  const brief = liveSnapshot(shown, context).hand!.brief
+  const board = shown.community.map(cardToString).join(' ')
+  t.is(
+    brief,
+    `Hand 1, complete. You are BTN with ${a} ${b}, 190 behind. Board ${board}. One won 30 at showdown.`,
+  )
+  // Opponents' cards were turned over at showdown, but the brief never names them.
+  for (const player of shown.players.slice(1))
+    for (const card of player.hole) t.false(new RegExp(`\\b${cardToString(card)}\\b`).test(brief))
+})
+
+test('brief: waiting on an AI, nothing to call, absent hero, never currency', (t) => {
+  const aiTurn = applyAction(deal(), { type: 'call' })
+  t.true(liveSnapshot(aiTurn, context).hand!.brief.endsWith('Pot 25. One (SB) to act.'))
+  let hand = applyAction(applyAction(aiTurn, { type: 'call' }), { type: 'check' })
+  hand = applyAction(applyAction(hand, { type: 'check' }), { type: 'check' })
+  t.true(liveSnapshot(hand, context).hand!.brief.endsWith('Your turn, nothing to call.'))
+  const absent = liveSnapshot(deal(), { ...context, heroId: 'nobody' }).hand!
+  t.is(absent.hero, null)
+  t.is(absent.brief, 'Hand 1, preflop. You are not in this hand. Pot 15. Hero (BTN) to act.')
+  for (const snapshot of [aiTurn, hand, deal()])
+    t.false(/\$|dollar|usd|€|£/i.test(liveSnapshot(snapshot, context).hand!.brief))
+})
+
+test('lastEquity keeps the latest hero-turn estimate separately from equity', (t) => {
+  const heroTurn = liveSnapshot(deal(), { ...context, displayedEquity: 0.72 }).hand!.hero!
+  t.deepEqual(heroTurn.lastEquity, { equity: 0.72, equityDisplay: '72%', street: 'preflop' })
+  const aiTurn = applyAction(deal(), { type: 'call' })
+  const remembered = liveSnapshot(aiTurn, {
+    ...context,
+    displayedEquity: 0.72,
+    lastEquity: { equity: 0.72, street: 'preflop' },
+  }).hand!
+  t.is(remembered.hero!.equity, null)
+  t.is(remembered.hero!.equityDisplay, '—')
+  t.deepEqual(remembered.hero!.lastEquity, {
+    equity: 0.72,
+    equityDisplay: '72%',
+    street: 'preflop',
+  })
+  t.true(remembered.brief.endsWith('One (SB) to act. Last estimate 72% preflop.'))
+  for (const bad of [
+    null,
+    undefined,
+    { equity: 1.2, street: 'flop' },
+    { equity: NaN, street: 'flop' },
+  ])
+    t.is(liveSnapshot(aiTurn, { ...context, lastEquity: bad }).hand!.hero!.lastEquity, null)
+})

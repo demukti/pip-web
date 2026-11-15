@@ -18,6 +18,7 @@ import { useSeatActions } from './useSeatActions'
 import { HandHistoryDialog } from './HandHistoryDialog'
 import { HandsHelpDialog } from './HandsHelpDialog'
 import { LeaveDialog } from './LeaveDialog'
+import { LiveCoachingBadge } from './LiveCoachingBadge'
 import { PlayerDialog } from './PlayerDialog'
 import { RunRecap } from './RunRecap'
 import { useGame } from '@/store/game'
@@ -471,6 +472,10 @@ export function Table() {
             >
               {talkLine}
             </div>
+
+            {/* Live coaching, only while sharing: the stage's top-left corner is
+                outside the oval, so it covers nothing and moves nothing. */}
+            <LiveCoachingBadge className="absolute left-2 top-0 z-10" />
           </div>
 
           {/* the hero, at the near rail */}
