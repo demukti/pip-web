@@ -7,7 +7,9 @@ coaching"), checked 2026-11-15. Companion to [live-coaching-poc.md](./live-coach
 `feat/live-coaching-ledger`, plus read timing and request logs (see "Diagnosing a
 slow answer" in the POC doc), and showdown reveals in the snapshot
 (`result.shownHands`). `pnpm test:all` passes. Not yet deployed. Still open:
-D-1 (the four manual verification rows) and D-3 (retire `live-probe`).
+D-1 (the remaining manual verification rows). D-3 is done in the repo: `live-probe`
+and its test are removed; the deployed Worker and the ChatGPT plugin are deleted by
+the owner.
 
 Baseline: `ava tests/liveStateService.test.ts tests/liveCoachingState.test.ts
 tests/liveProbe.test.ts` → 24 passed. `pnpm test:all` and `pnpm build` were not
@@ -127,7 +129,7 @@ B3–B5 are optional; skip them if the POC is not going further.
 |----|--------|
 | D-1 | Run the four pending verification rows; record versions and timestamps. |
 | D-2 | Update `live-coaching-poc.md`: schema table (A4), token lifetimes (B1), status line, verification results. |
-| D-3 | Delete or disable `live-probe` once private iPhone Live is verified. |
+| D-3 | Done 2026-11-15: private iPhone Live verified by the owner; `live-probe` removed from the repo. |
 
 ## Suggested order
 

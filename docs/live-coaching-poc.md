@@ -1,12 +1,12 @@
 # Pip Live coaching — proof of concept
 
-Status: the public diagnostic works in text chat and, by user confirmation, iPhone
-Live in the owner's ChatGPT workspace. The private service is deployed and, by user
-confirmation, readable from an OAuth-protected text chat. The changes in
+Status: the private service is deployed and, by user confirmation, readable from
+an OAuth-protected text chat and from iPhone Live in the owner's ChatGPT workspace. The
+public diagnostic that preceded it is retired. The Worker changes in
 [live-coaching-ledger.md](./live-coaching-ledger.md) (2026-11-15) are implemented
 but not yet deployed: the Worker needs one `wrangler deploy` and ChatGPT a tool
-refresh. Authenticated iPhone retrieval is still to be verified. No automated poker
-decisions or model API calls were added. The poker engine is unchanged.
+refresh. No automated poker decisions or model API calls were added. The poker
+rules are unchanged; the engine gained one pure helper, `showsHoleCards`.
 
 ## Architecture
 
@@ -25,7 +25,8 @@ decisions or model API calls were added. The poker engine is unchanged.
 The snapshot adapter reuses `HandState`, `legalActions()`, `potSize()`, the engine
 log and `cardToString()`. Pip's existing `encodeHand()` is for completed replay
 links; its v2 form contains hidden opponent cards and must not be uploaded live.
-The standalone `live-probe/` Worker remains public and contains no game state.
+The public `live-probe` connectivity diagnostic was retired on 2026-11-15, once
+private iPhone Live retrieval worked; its code is in git history before that date.
 
 ## Access model and limits
 
@@ -72,8 +73,8 @@ credentials or OAuth callback parameters.
 
 ## First deployment (local terminal)
 
-From the repository root. Keep the working public probe in place;
-this deploys a **different** Worker.
+From the repository root. This deploys the
+private state Worker.
 
 1. Add the KV and Pages permissions needed by this phase:
 
@@ -131,7 +132,8 @@ this deploys a **different** Worker.
 
 ## Connect ChatGPT to the private service
 
-Create a **new** custom plugin called Pip Live, separate from Pip Live Probe:
+Create a custom plugin called Pip Live (remove the retired Pip Live Probe plugin
+if it is still installed):
 
 - Server URL: `https://pip-live-state.tizav.workers.dev/mcp`.
 - Authentication: OAuth. The server publishes authorization/protected-resource
@@ -152,8 +154,7 @@ The supported route and account-specific access are documented in
 [custom MCP connections](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt),
 [plugin connection testing](https://developers.openai.com/plugins/deploy/connect-chatgpt)
 and [OAuth authentication](https://developers.openai.com/plugins/build/auth).
-Documentation checked 2026-11-15. The public probe's successful Live test does not
-establish successful OAuth-protected game retrieval; verify that separately.
+Documentation checked 2026-11-15.
 
 ## JSON schema (version 1)
 
@@ -271,7 +272,7 @@ or deployments. Source remains on GitHub; runtime snapshots stay in the state se
 | Check | Result |
 | --- | --- |
 | Upstream/fork state and replay inspection | Completed |
-| Public probe deployment | User deployed `https://pip-live-probe.tizav.workers.dev`, version `d3fb52bc-67ea-4c9f-919c-1ae1906c00f2` |
+| Public probe deployment (retired) | User deployed `https://pip-live-probe.tizav.workers.dev`, version `d3fb52bc-67ea-4c9f-919c-1ae1906c00f2` |
 | Public probe text chat | Two user-supplied tool results at 12:20:09.110Z and 12:20:09.507Z on 2026-11-15, distinct IDs |
 | Public probe iPhone Live | User reports it works; app version and correlated Worker logs not supplied |
 | Initial state and repeated moves in unfinished hands | Automated handler tests use the real engine and real OAuth library with in-memory bindings; initial and four subsequent states retrieved with matching increasing versions |
@@ -286,8 +287,8 @@ or deployments. Source remains on GitHub; runtime snapshots stay in the state se
 | Browser publisher connection | User reports `Live · version 7` from the real game |
 | OAuth consent browser issue | Fixed `no-referrer` causing `Origin: null` on form posts by using `strict-origin`; origin and browser-bound cookie checks remain enforced. Private deployment/retest required. |
 | Actual second-device private retrieval | Pending |
-| Actual OAuth-protected ChatGPT text and iPhone Live retrieval | Pending; public diagnostic success does not satisfy these rows |
-| Private OAuth text retrieval after consent fix | User reports it works; private iPhone Live and displayed-equity comparison still require explicit verification |
+| Actual OAuth-protected ChatGPT text and iPhone Live retrieval | User reports both work (2026-11-15); tool versions and timestamps not supplied |
+| Private OAuth text retrieval after consent fix | User reports it works; displayed-equity comparison still requires explicit verification |
 
 For the deployed demonstration: connect the real game, fetch its initial state,
 make a move, fetch again, and repeat at least four times through an unfinished
