@@ -11,8 +11,9 @@ player sees "Coach"; it was called "Ask Pip" until 2026-11-16, renamed because t
 answer is not Pip talking.
 
 Status (2026-11-16): live on the fork's `main`, follow-ups included. Each push to
-`main` deploys the game and the Worker together (`deploy-pip-tutor.yaml`; Worker
-version `8b7d285b` from `501b904`). Deploy the Worker by hand only alongside the game
+`main` deploys the game and the Worker together (`deploy-pip-tutor.yaml`, a new Worker
+version each time: `wrangler deployments list --config live-state/wrangler.jsonc`
+shows the live one). Deploy the Worker by hand only alongside the game
 it serves: a game with follow-ups needs a Worker that reads `thread`, or each
 follow-up is answered as the first question again. It replaces
 the ChatGPT coaching ("Pip Live"), which is archived at the tag `archive/chatgpt-live`
