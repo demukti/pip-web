@@ -2,14 +2,15 @@
 
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Lightbulb, RotateCw, X } from 'lucide-react'
+import { Lightbulb, MessageCircle, RotateCw, X } from 'lucide-react'
 import { askCoachConnection } from '@/lib/askCoach/connection'
-import { askCoach } from '@/lib/askCoach/session'
+import { askCoach, canReply, followUps } from '@/lib/askCoach/session'
 import { heroActions } from '@/lib/askCoach/table'
 import { sound } from '@/lib/sound'
 import { type KeyTarget, keysReachTable } from '@/lib/tableKeys'
 import { cn } from '@/lib/utils'
 import { useGame } from '@/store/game'
+import { AskCoachChat } from './AskCoachChat'
 import { useTableKeyboard, useTableKeys } from './keys'
 
 /*
@@ -23,6 +24,8 @@ import { useTableKeyboard, useTableKeys } from './keys'
 
 /** The desktop key for the button: A, for ask. Free in `lib/tableKeys`. */
 const ASK_KEY = 'a'
+/** The desktop key for the card's Reply: Q, for question, right above A. Free there too. */
+const REPLY_KEY = 'q'
 
 const useAnswer = () => useSyncExternalStore(askCoach.subscribe, askCoach.get, askCoach.getServer)
 const useSignedIn = () =>
@@ -86,8 +89,10 @@ const CONTROLS =
  * hand's result banner (z-30) and under the end-of-run overlay (z-40, later).
  *
  * Esc, ✕ or a tap on the table away from it closes it and keeps the answer;
- * ↻ asks again. Acting on the advice, the next deal or leaving the table drops
- * it. Sizing a raise is not acting yet: the card stays while the sizer is open.
+ * ↻ asks again, until there are follow-ups to lose; Reply (Q) opens the
+ * conversation (`AskCoachChat`), which ends with the card. Acting on the
+ * advice, the next deal or leaving the table drops it. Sizing a raise is not
+ * acting yet: the card stays while the sizer is open.
  */
 export function AskCoachCard({ hand }: { hand: number }) {
   const answer = useAnswer()
@@ -95,7 +100,9 @@ export function AskCoachCard({ hand }: { hand: number }) {
   const holdem = useHoldem()
   const keyboard = useTableKeyboard()
   const card = useRef<HTMLElement>(null)
-  const open = answer.phase !== 'idle' && answer.hand === hand && answer.shown
+  const mine = answer.phase !== 'idle' && answer.hand === hand ? answer : null
+  const open = !!mine?.shown
+  const chat = !!mine?.chat
 
   // Each of these ends the answer: the player's next action, and the table
   // closing (the cleanup runs on unmount)...
@@ -123,11 +130,20 @@ export function AskCoachCard({ hand }: { hand: number }) {
     } else if (keyboard && holdem && !e.repeat && e.key.toLowerCase() === ASK_KEY) {
       e.preventDefault()
       press(hand)
+    } else if (keyboard && !e.repeat && e.key.toLowerCase() === REPLY_KEY) {
+      // What Reply does, whenever the card would offer it: open or closed.
+      const now = askCoach.get()
+      if (now.phase === 'idle' || now.hand !== hand) return
+      if (!canReply(now) && followUps(now) === 0) return
+      e.preventDefault()
+      askCoach.openChat()
     }
   })
 
+  // The conversation is a dialog of its own, with menus outside it: while it
+  // is open, a tap is never a tap away from the card.
   useEffect(() => {
-    if (!open) return
+    if (!open || chat) return
     const away = (event: PointerEvent) => {
       const target = event.target as Element | null
       if (!target || card.current?.contains(target) || target.closest?.(CONTROLS)) return
@@ -135,66 +151,111 @@ export function AskCoachCard({ hand }: { hand: number }) {
     }
     document.addEventListener('pointerdown', away, true)
     return () => document.removeEventListener('pointerdown', away, true)
-  }, [open])
+  }, [open, chat])
 
   const asking = answer.phase === 'asking'
   const busy = asking || answer.phase === 'answering'
-  const lines = open ? answer.text.trimStart().split('\n') : []
+  // A follow-up's answer is plain words; the first answer opens with the advice.
+  const followUp = mine?.question ?? null
+  const lines = open && mine && !followUp ? mine.text.trimStart().split('\n') : []
   const advice = lines[0] ?? ''
-  const why = lines.slice(1).join('\n').trim()
+  const why = followUp ? (mine?.text.trim() ?? '') : lines.slice(1).join('\n').trim()
+  const talked = mine ? followUps(mine) > 0 : false
+  const replying = mine ? canReply(mine) : false
   const corner =
     'rounded-full p-1 text-muted-foreground transition hover:bg-foreground/10 hover:text-foreground disabled:opacity-40'
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.section
-          ref={card}
-          key="answer"
-          aria-label="The coach’s advice"
-          aria-live="polite"
-          aria-busy={busy}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 6 }}
-          transition={{ duration: 0.15 }}
-          className="absolute inset-x-0 bottom-0 z-40 mx-auto max-h-[max(100%,12rem)] w-[min(26rem,calc(100%-1.5rem))] overflow-y-auto rounded-2xl border border-foreground/10 bg-background/95 p-3 pr-14 text-sm shadow-lg backdrop-blur-sm"
-        >
-          <div className="absolute right-1.5 top-1.5 flex gap-0.5">
-            <button
-              type="button"
-              onClick={() => {
-                sound.play('tap')
-                void askCoach.start(hand)
-              }}
-              disabled={asking}
-              aria-label="Ask the coach again"
-              className={corner}
-            >
-              <RotateCw className="size-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => askCoach.hide()}
-              aria-label="Close the coach’s advice"
-              aria-keyshortcuts={keyboard ? 'Escape' : undefined}
-              className={corner}
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-          {asking ? (
-            <p className="text-muted-foreground motion-safe:animate-pulse">Reading the table…</p>
-          ) : (
-            <>
-              {advice && <p className="font-semibold text-foreground">{advice}</p>}
-              {why && <p className="mt-1 whitespace-pre-line text-muted-foreground">{why}</p>}
-            </>
-          )}
-          {answer.phase === 'failed' && (
-            <p className="mt-1 text-muted-foreground">{answer.message}</p>
-          )}
-        </motion.section>
-      )}
-    </AnimatePresence>
+    <>
+      {mine && <AskCoachChat answer={mine} open={chat} />}
+      <AnimatePresence>
+        {open && (
+          <motion.section
+            ref={card}
+            key="answer"
+            aria-label="The coach’s advice"
+            aria-live="polite"
+            aria-busy={busy}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 6 }}
+            transition={{ duration: 0.15 }}
+            className="absolute inset-x-0 bottom-0 z-40 mx-auto max-h-[max(100%,12rem)] w-[min(26rem,calc(100%-1.5rem))] overflow-y-auto rounded-2xl border border-foreground/10 bg-background/95 p-3 pr-14 text-sm shadow-lg backdrop-blur-sm"
+          >
+            <div className="absolute right-1.5 top-1.5 flex gap-0.5">
+              {!talked && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    sound.play('tap')
+                    void askCoach.start(hand)
+                  }}
+                  disabled={asking}
+                  aria-label="Ask the coach again"
+                  className={corner}
+                >
+                  <RotateCw className="size-3.5" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => askCoach.hide()}
+                aria-label="Close the coach’s advice"
+                aria-keyshortcuts={keyboard ? 'Escape' : undefined}
+                className={corner}
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+            {followUp && (
+              <p className="mb-1 truncate text-xs text-muted-foreground">You: {followUp}</p>
+            )}
+            {asking ? (
+              <p className="text-muted-foreground motion-safe:animate-pulse">
+                {followUp ? 'Thinking…' : 'Reading the table…'}
+              </p>
+            ) : (
+              <>
+                {advice && <p className="font-semibold text-foreground">{advice}</p>}
+                {why && (
+                  <p
+                    className={cn(
+                      'whitespace-pre-line',
+                      followUp ? 'text-foreground/90' : 'mt-1 text-muted-foreground',
+                    )}
+                  >
+                    {why}
+                  </p>
+                )}
+              </>
+            )}
+            {answer.phase === 'failed' && (
+              <p className="mt-1 text-muted-foreground">{answer.message}</p>
+            )}
+            {(replying || talked) && (
+              <button
+                type="button"
+                onClick={() => {
+                  sound.play('tap')
+                  askCoach.openChat()
+                }}
+                aria-keyshortcuts={keyboard ? 'Q' : undefined}
+                className="mt-2 -mb-1 -ml-1 flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium text-muted-foreground transition hover:bg-foreground/10 hover:text-foreground"
+              >
+                <MessageCircle className="size-3.5" />
+                {talked ? 'Conversation' : 'Reply'}
+                {keyboard && (
+                  <kbd
+                    aria-hidden
+                    className="ml-0.5 grid h-4 min-w-4 place-items-center rounded bg-foreground/[0.06] px-1 font-sans text-3xs leading-none"
+                  >
+                    Q
+                  </kbd>
+                )}
+              </button>
+            )}
+          </motion.section>
+        )}
+      </AnimatePresence>
+    </>
   )
 }

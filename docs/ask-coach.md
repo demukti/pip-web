@@ -11,7 +11,9 @@ player sees "Coach"; it was called "Ask Pip" until 2026-11-16, renamed because t
 answer is not Pip talking.
 
 Status (2026-11-16): on the branch `feat/in-game-coach`. Its Worker was deployed by
-hand from that branch (version `24a1dce0`); the hosted game has no button until the
+hand from that branch (version `68630224`, with follow-ups; a game with follow-ups needs
+a Worker that reads `thread`, or each follow-up is answered as the first question
+again); the hosted game has no button until the
 branch reaches `main`, whose push also redeploys the Worker. It replaces
 the ChatGPT coaching ("Pip Live"), which is archived at the tag `archive/chatgpt-live`
 with its docs in [archive/](./archive/live-coaching.md). The poker rules are
@@ -29,9 +31,10 @@ hand with the question and answers in one model pass: first words in about a sec
    what the player can see, plus the table around it (venue, level, each seat's
    style line and "Your reads", derived as `PlayerDialog` derives them).
 2. `AskCoachSession` (`session.ts`) sends `POST /coach` with this browser's token and
-   `{ hand, settings }` (`connection.ts`).
-3. The Worker (`live-state/worker.mjs`) checks the question's shape (at most 32 KB,
-   `hand` an object or `null`), then asks the Durable Object (`devices.mjs`), which
+   `{ hand, settings }` (`connection.ts`), and for a follow-up `thread` too (see
+   [Follow-ups](#follow-ups)).
+3. The Worker (`live-state/worker.mjs`) checks the question's shape (at most 64 KB,
+   `hand` an object or `null`, `thread` as `coachThread` takes it), then asks the Durable Object (`devices.mjs`), which
    checks the token and the rate (6 questions a rolling minute, across every browser).
 4. `live-state/coach.mjs` streams one Claude answer back as NDJSON: `text` lines, then
    one `done` or `error` (with a message fit to show the player). The game reads the
@@ -78,15 +81,21 @@ Measured on four made-up spots (2026-11-16):
 | Haiku 5.5, thinking off | 0.9–1.7 s | 1.7–2.7 s | Gave the wrong outs for a straight draw |
 | Opus 5.5, low effort | 2.3–3.1 s | 3.4–4.3 s | Good, slowest |
 
-About 1,000 tokens in and 100–150 out: roughly 0.35 cents a question. The system
-prompt is under the minimum cacheable length, so it is not cached.
+About 1,000 tokens in and 100–150 out: roughly 0.35 cents a question. A follow-up
+sends the whole conversation again, about 200 tokens more each time: 0.4–0.5 cents,
+so a question and three follow-ups come to about 1.6 cents. Nothing is cached:
+Sonnet 5.5 caches prefixes from 512 tokens, but most questions get no follow-up, and
+writing the cache costs 1.25 times the input on every first question to save about
+0.2 cents on each follow-up.
 
 **What the model sees.** Fixed rules (`COACH_SYSTEM`): the answer's shape; no advice
 when it is not the hero's turn or the run is over; the description's own equity, pot
 odds and hand name rather than its own arithmetic; legal actions only; reads only when
 present; never a guessed card; chips without a currency sign. Then the player's
 length, then the player's notes, told to yield to the rules. The user message is
-`{ hand }`, exactly as the game sent it.
+`{ hand }`, exactly as the game sent it. The rules end with how to answer a
+follow-up: the question itself, in plain words, no advice line unless asked what to
+do, within the length's sentences.
 
 ## The player's settings
 
@@ -116,7 +125,9 @@ right under "< Venues": a mis-tap away from leaving the table.
 **What it does.** Nothing kept: it asks. An answer kept for this deal and closed: it
 brings the card back without asking (a dot on the bulb says one is waiting; the bulb
 pulses while one is still being written). A failed answer is never brought back:
-pressing asks again. With the card open, asking again is the card's ↻.
+pressing asks again. With the card open, asking again is the card's ↻. Once there
+are follow-ups, nothing starts over: closed, the button brings the card back; open, it
+opens the conversation; and the card has no ↻.
 
 **Closing and dropping.** Esc, the card's ✕ or a tap on the table away from it closes
 the card and keeps the answer. Taps on controls do not count as away: pressing Raise
@@ -126,9 +137,12 @@ confirmed bet or raise: `heroActions` counts your entries in `hand.actions`), at
 next deal, and when the table closes.
 
 **Keys** (desktop only, by upstream's `KEYBOARD_QUERY`): A does what the button does,
-Esc closes the card. A is free in `lib/tableKeys.ts` (F, C, X, Space, R, 1–4, Enter,
-Esc, ?) and is not added to upstream's `?` list, which its test holds to that file;
-the button's tooltip says it instead. Keys go through upstream's `keysReachTable`, so
+Q does what the card's Reply does (open or closed, whenever the card would offer it:
+it opens the conversation), Esc closes the card. Q sits right above A: A asks, Q asks
+more. Both are free in `lib/tableKeys.ts` (F, C, X, Space, R, 1–4, Enter, Esc, ?), and
+`tests/askCoachHooks.test.ts` fails if upstream ever claims either. Neither is added to
+upstream's `?` list, which its test holds to that file; the bulb's tooltip says A and
+the Reply button shows a small Q. Keys go through upstream's `keysReachTable`, so
 nothing fires while typing or while a dialog is open: Esc in the raise sizer closes
 only the sizer.
 
@@ -143,6 +157,49 @@ lies over the hand's result banner (z-30) and under the end-of-run overlay. A z-
 on the wrapper made a stacking context and put the banner over the card at showdown.
 
 The button and the card sit apart, so they share one answer (`session.ts`, no React).
+
+## Follow-ups
+
+The card's **Reply** opens the conversation on that deal
+(`src/components/table/AskCoachChat.tsx`): full screen on a phone, so the keyboard
+and its dictation mic have room, and a panel in the middle of a wider screen. Voice
+is the keyboard's own dictation (Apple's, on iPhone and Mac), never the browser's
+speech API, which sends the audio to Google in Chrome and does not exist in Firefox.
+
+- **The hand** stays pinned at the top, live: your cards, the board, the pot and the
+  price to call.
+- **The conversation** scrolls under it: what you asked on the right (the bulb's own
+  question shows as "What should I do here?"), the coach's answers on the left.
+- **The question box** at the foot grows with what you type or dictate. Enter sends,
+  Shift+Enter starts a new line. It takes the focus on opening only with a mouse:
+  on a phone the keyboard waits for a tap, so it doesn't cover the conversation you
+  opened to read.
+- **Quick questions** sit behind the small ? button left of the box, out of the way
+  until wanted. A tap asks one as written. They are a plain list in
+  `src/lib/askCoach/questions.ts`: add your own there.
+- **Closing** (✕, Esc, or a click outside on a wide screen) goes back to the table
+  with the card open on the latest answer. The conversation ends with the card's:
+  acting, the next deal or leaving the table drops it and stops an answer still
+  being written. A half-typed question survives closing the sheet.
+
+**What is sent.** The game keeps the conversation; the service keeps nothing between
+questions. Each follow-up sends `thread`: one turn per follow-up, each the coach's
+answer to the message before it and the question put after it. The model sees the
+hand, then each answer as an assistant turn and each question as a user turn. A
+question asked while an opponent was to act can go stale as the table moves, so a
+turn carries `hand` too when the hand changed since the coach last saw it, and the
+rules tell the model the newest hand stands.
+
+**Limits** (`FOLLOW_UPS_MAX`, `FOLLOW_UP_MAX`, held equal on both sides by a test): 8
+follow-ups a deal, 500 characters each; the sheet says when two or fewer are left.
+A failed follow-up is replaced by the next one, or put again as it was with "Try
+again"; a failed first answer is asked again, never replied to. Follow-ups count
+against the same 6 questions a minute.
+
+**On an iPhone** the sheet is sized to the visual viewport (`visualViewport`), not the
+screen: Safari lays the keyboard over the page without resizing it, so a sheet sized
+to the screen would put the question box under the keys. The box's text is 16px, or
+iOS zooms the page in on focus.
 
 ## Setup
 
@@ -263,8 +320,9 @@ who pays (docs/membership.md already lists coaching among what the membership se
 
 | Area | Status |
 | --- | --- |
-| Automated, `ava 'tests/askCoach*.test.ts'` | 72 pass (2026-11-16). `askCoach` (35): the real Worker and Durable Object in Node with the real Anthropic SDK against a stand-in API: sign-in (wrong key, only the hash stored), signed-out, revoked and rotated tokens, the 5-browser cap, 30-day sliding expiry, old records deleted, the answer on the hand sent, the rate, no API key, malformed and oversized questions, settings settled, failures and refusals with class-only logs, closing and disconnecting stopping the model call (each checked to fail with its abort path removed), CORS; the game's sign-in, the NDJSON reader, the shared answer (closing keeps it and the button brings it back without asking, an answer closed mid-way still arrives whole, a failed one is asked again, acting or the next deal drops it and stops the call), the settings store. `askCoachHand` (26): the hand description and its privacy. `askCoachTable` (6): the table context against the real stores with a real game, including spectating, and the action count that drops the answer. `askCoachHooks` (5): the wiring guard, including the button in the panel's corner on both layouts |
+| Automated, `ava 'tests/askCoach*.test.ts'` | 79 pass (2026-11-16). `askCoach` (42): the real Worker and Durable Object in Node with the real Anthropic SDK against a stand-in API: sign-in (wrong key, only the hash stored), signed-out, revoked and rotated tokens, the 5-browser cap, 30-day sliding expiry, old records deleted, the answer on the hand sent, the rate, no API key, malformed and oversized questions, settings settled, failures and refusals with class-only logs, closing and disconnecting stopping the model call (each checked to fail with its abort path removed), CORS; the game's sign-in, the NDJSON reader, the shared answer (closing keeps it and the button brings it back without asking, an answer closed mid-way still arrives whole, a failed one is asked again, acting or the next deal drops it and stops the call), the settings store; follow-ups: the conversation sent whole as alternating turns, a changed hand sent again once, malformed conversations refused, a failed follow-up put again or replaced, a failed first answer never replied to, the limit, the button opening a conversation instead of starting over, and the two sides' limits agreeing. `askCoachHand` (26): the hand description and its privacy. `askCoachTable` (6): the table context against the real stores with a real game, including spectating, and the action count that drops the answer. `askCoachHooks` (5): the wiring guard, including the button in the panel's corner on both layouts |
 | By hand, 2026-11-16, the lightbulb | Local game against the deployed Worker: the bulb in the panel's bottom-left corner, lined up under the ? above it. Asked once, then Esc closed the card (the bulb's label became "Show the coach's advice", with its dot), A brought it back, a tap on the felt closed it, the bulb brought it back: one question in all. ↻ put a second. With the raise sizer open the card stayed; confirming the raise dropped it |
 | By hand, 2026-11-16, deployed Worker `24a1dce0` | Local game: the owner signed in once in Settings (`/connect` 200 in 149 ms; the browser keeps only the URL and the token). Two Teach me answers preflop: the service streamed after 37–40 ms, first words at 0.64–0.78 s, done at 2.8 s, 1,350 tokens in and 210–226 out, both log lines each. A refused token (a placeholder) signed the browser out, hid the button and said so in the card |
 | By hand, 2026-11-16 (ChatGPT-era protocol, same model code) | Answers streaming into the card (first words 0.7–1.1 s, done 1.3–2.7 s from the click), Standard at three sentences, Short shorter, ✕ stopping the model call (`coach_closed` at 933 ms), the card over the result banner at showdown |
-| Unverified | The notes as the model applies them (Teach me ran to seven sentences once, one over its six), a refused API key, the rate limit as the player sees it, the bulb on a real phone (touch) |
+| By hand, 2026-11-16, follow-ups | Local game against a local stand-in for `/coach` (no model calls), Chromium at 375×812 and at desktop width. Reply opened the sheet full screen on the phone size with the hand pinned (J♣ 3♣, pot 3, to call 2) and the box inside the screen at 16px, not focused; a typed follow-up sent with Enter and a quick question from the ? menu both streamed in. The stand-in received the conversation growing by one turn each time, the hand never sent again (unchanged). Esc went back to the card, which showed the latest follow-up with "Conversation" and no ↻; a second Esc closed it and the bulb brought it back without asking. At desktop width the sheet is a 448×640 panel with the box focused, and reopening it lands at the conversation's end |
+| Unverified | The notes as the model applies them (Teach me ran to seven sentences once, one over its six), a refused API key, the rate limit as the player sees it, the bulb on a real phone (touch); follow-ups against the real model, the sheet on a real iPhone with the keyboard and dictation open (the visual-viewport sizing), and the sheet in Firefox and Safari |

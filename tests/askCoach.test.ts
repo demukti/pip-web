@@ -3,16 +3,25 @@
 // game's own client code (sign-in, one answer at a time, reading the stream).
 import test, { type ExecutionContext } from 'ava'
 import {
+  FOLLOW_UP_MAX as SERVICE_FOLLOW_UP_MAX,
+  FOLLOW_UPS_MAX as SERVICE_FOLLOW_UPS_MAX,
   COACH_STYLES as SERVICE_STYLES,
   NOTES_MAX as SERVICE_NOTES_MAX,
 } from '../live-state/coach.mjs'
 import { COACH_PER_MINUTE, MAX_DEVICES } from '../live-state/devices.mjs'
 import { hash } from '../live-state/http.mjs'
 import worker, { LiveState } from '../live-state/worker.mjs'
-import { COACH_STYLES, CoachPrefsStore, NOTES_MAX, readCoach } from '@/lib/askCoach/coach'
+import {
+  COACH_STYLES,
+  CoachPrefsStore,
+  FOLLOW_UP_MAX,
+  FOLLOW_UPS_MAX,
+  NOTES_MAX,
+  readCoach,
+} from '@/lib/askCoach/coach'
 import { AskCoachConnection } from '@/lib/askCoach/connection'
 import type { CoachHand } from '@/lib/askCoach/hand'
-import { AskCoachSession, type Question } from '@/lib/askCoach/session'
+import { AskCoachSession, canReply, type Question } from '@/lib/askCoach/session'
 
 // The Worker writes log lines with console.info; keep them for the log tests.
 const logged: string[] = []
@@ -60,6 +69,9 @@ const HAND = {
   community: ['Qs', 'Jc', '4h'],
   availableActions: [{ type: 'fold' }, { type: 'call', amount: 6 }],
 }
+
+/** A conversation still on its first question, in the card. */
+const FIRST = { earlier: [], question: null, chat: false }
 
 // ---------------------------------------------------------------------------
 // The service in Node: the Worker, its object and in-memory bindings.
@@ -494,7 +506,7 @@ test.serial('a malformed or oversized question is refused before anything is ask
     {},
     { hand: [1, 2] },
     { hand: 'Ah Kd' },
-    { hand: { padding: 'x'.repeat(40_000) } },
+    { hand: { padding: 'x'.repeat(70_000) } },
   ]
   for (const body of bad) {
     const response = await ask(fetcher, bearer, body)
@@ -758,7 +770,13 @@ test.serial('the button asks about the hand on the table and shows the answer', 
     () => HAND as unknown as CoachHand,
   )
   await session.start(7)
-  t.deepEqual(session.get(), { phase: 'done', hand: 7, text: 'Call 6.\nCheap price.', shown: true })
+  t.deepEqual(session.get(), {
+    phase: 'done',
+    hand: 7,
+    text: 'Call 6.\nCheap price.',
+    shown: true,
+    ...FIRST,
+  })
   t.deepEqual(JSON.parse(calls[0].body.messages[0].content), { hand: HAND })
   t.is(calls[0].body.system[1].text, SERVICE_STYLES.short)
 })
@@ -873,6 +891,8 @@ test('the game and the service agree on styles and the notes limit', (t) => {
     Object.keys(SERVICE_STYLES),
   )
   t.is(NOTES_MAX, SERVICE_NOTES_MAX)
+  t.is(FOLLOW_UPS_MAX, SERVICE_FOLLOW_UPS_MAX)
+  t.is(FOLLOW_UP_MAX, SERVICE_FOLLOW_UP_MAX)
 })
 
 // ---------------------------------------------------------------------------
@@ -920,7 +940,13 @@ test('an answer streams in, then stays for its hand', async (t) => {
   )
   session.subscribe(() => seen.push(session.get().phase))
   await session.start(4)
-  t.deepEqual(session.get(), { phase: 'done', hand: 4, text: 'Call 2.\nCheap.', shown: true })
+  t.deepEqual(session.get(), {
+    phase: 'done',
+    hand: 4,
+    text: 'Call 2.\nCheap.',
+    shown: true,
+    ...FIRST,
+  })
   t.deepEqual(seen, ['asking', 'answering', 'answering', 'done'])
 })
 
@@ -930,9 +956,9 @@ test('closing the card keeps the answer; the button brings it back without askin
   await settle()
   t.is(asked(), 1)
   session.hide()
-  t.deepEqual(session.get(), { phase: 'done', hand: 4, text: 'Fold.', shown: false })
+  t.deepEqual(session.get(), { phase: 'done', hand: 4, text: 'Fold.', shown: false, ...FIRST })
   session.press(4)
-  t.deepEqual(session.get(), { phase: 'done', hand: 4, text: 'Fold.', shown: true })
+  t.deepEqual(session.get(), { phase: 'done', hand: 4, text: 'Fold.', shown: true, ...FIRST })
   t.is(asked(), 1)
   // With the card open, pressing asks again.
   session.press(4)
@@ -943,7 +969,7 @@ test('closing the card keeps the answer; the button brings it back without askin
   session.press(5)
   await settle()
   t.is(asked(), 3)
-  t.like(session.get(), { phase: 'done', hand: 5, shown: true })
+  t.like(session.get(), { phase: 'done', hand: 5, shown: true, ...FIRST })
 })
 
 test('a closed answer still being written goes on arriving, and comes back whole', async (t) => {
@@ -976,6 +1002,7 @@ test('a closed answer still being written goes on arriving, and comes back whole
     hand: 2,
     text: 'Raise to 24.\nFold equity.',
     shown: false,
+    ...FIRST,
   })
 })
 
@@ -994,7 +1021,7 @@ test('a failed answer is never brought back: pressing asks again', async (t) => 
   fail = false
   session.press(3)
   await settle()
-  t.deepEqual(session.get(), { phase: 'done', hand: 3, text: 'Check.', shown: true })
+  t.deepEqual(session.get(), { phase: 'done', hand: 3, text: 'Check.', shown: true, ...FIRST })
 })
 
 test('the next deal or the player acting drops the answer and stops it being written', async (t) => {
@@ -1042,6 +1069,7 @@ test('a failed or unreachable ask keeps what was written and says why', async (t
     text: 'Fo',
     message: 'The coach is busy.',
     shown: true,
+    ...FIRST,
   })
   const offline = new AskCoachSession(
     async () => {
@@ -1057,6 +1085,7 @@ test('a failed or unreachable ask keeps what was written and says why', async (t
     text: '',
     message: 'Couldn’t reach the coach. Ask again.',
     shown: true,
+    ...FIRST,
   })
 })
 
@@ -1083,4 +1112,187 @@ test('each ask sends the hand and the settings as they are at that moment', asyn
       ['teach', 'turn'],
     ],
   )
+})
+
+// ---------------------------------------------------------------------------
+// Follow-ups: the game keeps the conversation and sends it whole each time
+
+test.serial(
+  'a follow-up sends the conversation: each answer, then the question after it',
+  async (t) => {
+    const calls = standIn(t, () => streamed(answerEvents(['Raising folds out worse hands.'])))
+    const { fetcher } = fixture()
+    const bearer = await token(fetcher)
+    const turn = { ...HAND, street: 'turn' }
+    const response = await ask(fetcher, bearer, {
+      ...QUESTION,
+      thread: [
+        { answer: 'Call 6.\nCheap.', question: '  Why not raise?  ' },
+        { answer: 'It folds out worse.', question: 'And now?', hand: turn },
+      ],
+    })
+    t.is(response.status, 200)
+    await response.text()
+    const messages = calls[0].body.messages as unknown as {
+      role: string
+      content: string | { type: string; text: string }[]
+    }[]
+    t.deepEqual(
+      messages.map((message) => message.role),
+      ['user', 'assistant', 'user', 'assistant', 'user'],
+    )
+    t.deepEqual(JSON.parse(messages[0].content as string), { hand: HAND })
+    t.is(messages[1].content, 'Call 6.\nCheap.')
+    t.is(messages[2].content, 'Why not raise?')
+    t.is(messages[3].content, 'It folds out worse.')
+    // The table had moved: the hand as it then stood goes with the question.
+    const [hand, question] = messages[4].content as { type: string; text: string }[]
+    t.deepEqual(JSON.parse(hand.text), { hand: turn })
+    t.is(question.text, 'And now?')
+    t.regex(calls[0].body.system[0].text, /Follow-up questions/)
+  },
+)
+
+test.serial('a malformed conversation is refused before anything is asked', async (t) => {
+  const calls = standIn(t, () => streamed(answerEvents(['Fold.'])))
+  const { fetcher } = fixture()
+  const bearer = await token(fetcher)
+  const turn = { answer: 'Fold.', question: 'Why?' }
+  const bad = [
+    { thread: 'Why?' },
+    { thread: Array.from({ length: SERVICE_FOLLOW_UPS_MAX + 1 }, () => turn) },
+    { thread: [{ answer: 'Fold.', question: '   ' }] },
+    { thread: [{ answer: 'Fold.', question: 'x'.repeat(SERVICE_FOLLOW_UP_MAX + 1) }] },
+    { thread: [{ answer: '', question: 'Why?' }] },
+    { thread: [{ question: 'Why?' }] },
+    { thread: [{ ...turn, hand: ['Ah'] }] },
+    { thread: [null] },
+  ]
+  for (const extra of bad) {
+    const response = await ask(fetcher, bearer, { ...QUESTION, ...extra })
+    t.is(response.status, 400, JSON.stringify(extra).slice(0, 60))
+  }
+  t.is(calls.length, 0)
+  const most = await ask(fetcher, bearer, {
+    ...QUESTION,
+    thread: Array.from({ length: SERVICE_FOLLOW_UPS_MAX }, () => turn),
+  })
+  t.is(most.status, 200)
+  await most.text()
+})
+
+/** A session that answers A1, A2… (or fails where `fails` says) and keeps what it was sent. */
+function talking(hand: () => unknown = () => HAND, fails: (n: number) => boolean = () => false) {
+  const sent: Question[] = []
+  const session = new AskCoachSession(
+    async (question) => {
+      sent.push(question)
+      return fails(sent.length)
+        ? answerBody({ type: 'error', message: 'The coach is busy.' })
+        : answerBody({ type: 'text', text: `A${sent.length}` }, { type: 'done' })
+    },
+    prefs,
+    hand as () => CoachHand,
+  )
+  return { session, sent }
+}
+
+test('a follow-up carries the conversation; the hand goes again only when it changed', async (t) => {
+  let street = 'flop'
+  const { session, sent } = talking(() => ({ ...HAND, street }))
+  await session.start(1)
+  t.false('thread' in sent[0])
+  await session.reply('Why?')
+  t.deepEqual(sent[1].hand, { ...HAND, street: 'flop' })
+  t.deepEqual(sent[1].thread, [{ answer: 'A1', question: 'Why?' }])
+  street = 'turn'
+  await session.reply('  And now?  ')
+  t.deepEqual(sent[2].hand, { ...HAND, street: 'flop' })
+  t.deepEqual(sent[2].thread, [
+    { answer: 'A1', question: 'Why?' },
+    { answer: 'A2', question: 'And now?', hand: { ...HAND, street: 'turn' } },
+  ])
+  // Seen once, the new hand is not sent again with the next question.
+  await session.reply('Sure?')
+  t.false('hand' in (sent[3].thread?.[2] ?? {}))
+  t.deepEqual(session.get(), {
+    phase: 'done',
+    hand: 1,
+    earlier: [
+      { question: null, answer: 'A1' },
+      { question: 'Why?', answer: 'A2' },
+      { question: 'And now?', answer: 'A3' },
+    ],
+    question: 'Sure?',
+    text: 'A4',
+    shown: true,
+    chat: true,
+  })
+})
+
+test('a failed follow-up is asked again as it was, or replaced by the next', async (t) => {
+  const { session, sent } = talking(undefined, (n) => n === 2 || n === 3)
+  await session.start(1)
+  await session.reply('Why?')
+  t.like(session.get(), { phase: 'failed', question: 'Why?', message: 'The coach is busy.' })
+  t.true(canReply(session.get()))
+  await session.again()
+  t.deepEqual(sent[2].thread, sent[1].thread)
+  await session.reply('Why not raise?')
+  t.deepEqual(sent[3].thread, [{ answer: 'A1', question: 'Why not raise?' }])
+  t.like(session.get(), {
+    phase: 'done',
+    earlier: [{ question: null, answer: 'A1' }],
+    question: 'Why not raise?',
+    text: 'A4',
+  })
+})
+
+test('a failed first answer is asked again, never replied to', async (t) => {
+  const { session, sent } = talking(undefined, (n) => n === 1)
+  await session.start(1)
+  t.false(canReply(session.get()))
+  await session.reply('Why?')
+  t.is(sent.length, 1)
+  await session.again()
+  t.false('thread' in sent[1])
+  t.like(session.get(), { phase: 'done', text: 'A2', question: null })
+})
+
+test('follow-ups stop at the limit, and none goes while an answer is being written', async (t) => {
+  const { session, sent } = talking()
+  await session.start(1)
+  for (let i = 0; i < FOLLOW_UPS_MAX; i++) await session.reply(`Q${i}`)
+  t.is(sent.length, FOLLOW_UPS_MAX + 1)
+  t.false(canReply(session.get()))
+  await session.reply('One more?')
+  t.is(sent.length, FOLLOW_UPS_MAX + 1)
+
+  const signals: AbortSignal[] = []
+  const slow = new AskCoachSession(neverAnswers(signals), prefs, noHand)
+  void slow.start(1)
+  t.false(canReply(slow.get()))
+  void slow.reply('Why?')
+  t.is(signals.length, 1)
+  slow.retire()
+})
+
+test('with a conversation, the button opens it instead of starting over', async (t) => {
+  const { session, sent } = talking()
+  await session.start(1)
+  await session.reply('Why?')
+  session.closeChat()
+  t.like(session.get(), { shown: true, chat: false })
+  session.hide()
+  t.like(session.get(), { shown: false, chat: false })
+  session.press(1)
+  t.like(session.get(), { shown: true, chat: false })
+  session.press(1)
+  t.like(session.get(), { shown: true, chat: true })
+  t.is(sent.length, 2)
+  // Acting, the next deal or leaving drops the whole conversation.
+  session.leave(1)
+  t.is(session.get().phase, 'idle')
+  await session.start(1)
+  t.false('thread' in sent[2])
 })

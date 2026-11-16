@@ -26,7 +26,9 @@ Rules:
 - Use the snapshot's numbers: hero.equity against hero.potOdds decides calls; hero.handName names the made hand; never re-derive either.
 - Advise only legal actions from availableActions. Bet and raise sizes are the total street commitment; a call amount is the extra chips.
 - Use an opponent's style and reads only if present; with empty reads there is no read yet. Never guess opponent cards.
-- Chips only: bare numbers, never a currency sign.`
+- Chips only: bare numbers, never a currency sign.
+
+Follow-up questions: after the first answer the player may ask about the same hand in their own words. Answer that question directly, in plain text: no advice line unless they ask what to do, and no more sentences than the length below allows after its advice line. A follow-up may come with the hand as it stands now, as {"hand": …}; from then on, that is the hand. The rules above still apply.`
 
 // The player's own settings (Settings → Coach), sent with each question.
 export const COACH_STYLES = {
@@ -62,6 +64,55 @@ export function coachSystem({ style, notes }) {
 // What the model sees: the hand, exactly as the game described it.
 export const coachInput = (hand) => JSON.stringify({ hand })
 
+// Follow-ups on one hand: how many, and how long each part may be. The game
+// keeps the conversation and sends it whole with each one; the service keeps
+// nothing between questions.
+export const FOLLOW_UPS_MAX = 8
+export const FOLLOW_UP_MAX = 500
+const ANSWER_MAX = 8000
+
+const isHand = (hand) => hand === null || (typeof hand === 'object' && !Array.isArray(hand))
+
+/**
+ * The conversation so far, or null when it is not one the game sends: each turn
+ * is the coach's answer to the message before it, then the player's next
+ * question, with the hand as it then stood when it had changed.
+ */
+export function coachThread(thread) {
+  if (thread === undefined) return []
+  if (!Array.isArray(thread) || thread.length > FOLLOW_UPS_MAX) return null
+  const turns = []
+  for (const turn of thread) {
+    const { answer, question, hand } = turn ?? {}
+    if (typeof answer !== 'string' || !answer.trim() || answer.length > ANSWER_MAX) return null
+    if (typeof question !== 'string') return null
+    const asked = question.trim()
+    if (!asked || asked.length > FOLLOW_UP_MAX) return null
+    if (hand !== undefined && !isHand(hand)) return null
+    turns.push(hand === undefined ? { answer, question: asked } : { answer, question: asked, hand })
+  }
+  return turns
+}
+
+/** The hand first; then each answer and the follow-up put after it. */
+export function coachMessages(hand, thread = []) {
+  const messages = [{ role: 'user', content: coachInput(hand) }]
+  for (const turn of thread) {
+    messages.push({ role: 'assistant', content: turn.answer })
+    messages.push({
+      role: 'user',
+      content:
+        turn.hand === undefined
+          ? turn.question
+          : [
+              { type: 'text', text: coachInput(turn.hand) },
+              { type: 'text', text: turn.question },
+            ],
+    })
+  }
+  return messages
+}
+
 // Class name of a failure, mapped to what the player is told. Never the message.
 const FAILURES = [
   // The player closed the answer; nobody is left to read the message.
@@ -85,7 +136,7 @@ const line = (value) => `${JSON.stringify(value)}\n`
  * any failure's class name, once the answer ends: hand it to `waitUntil`.
  * `signal` is the incoming request's, which aborts when the client disconnects.
  */
-export function streamCoach(env, hand, prefs = coachPrefs(null), signal = null) {
+export function streamCoach(env, hand, prefs = coachPrefs(null), signal = null, thread = []) {
   const client = new Anthropic({
     apiKey: env.ANTHROPIC_API_KEY,
     // Resolved per call, not captured, so a test can stand in for the API.
@@ -103,7 +154,7 @@ export function streamCoach(env, hand, prefs = coachPrefs(null), signal = null) 
     max_tokens: MAX_TOKENS,
     output_config: { effort: 'low' },
     system: coachSystem(prefs),
-    messages: [{ role: 'user', content: coachInput(hand) }],
+    messages: coachMessages(hand, thread),
     // A safety decline is re-run on the model the API picks for its category.
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',

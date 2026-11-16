@@ -25,6 +25,9 @@ export const COACH_STYLES: { value: CoachStyle; label: string; about: string }[]
   },
 ]
 export const NOTES_MAX = 500
+/** Follow-ups on one hand, and the characters in each: the service's limits too. */
+export const FOLLOW_UPS_MAX = 8
+export const FOLLOW_UP_MAX = 500
 
 const KEY = 'pip.ask-coach-settings.v1'
 const DEFAULT_PREFS: CoachPrefs = { style: 'standard', notes: '' }

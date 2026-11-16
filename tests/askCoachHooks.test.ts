@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs'
 import test from 'ava'
+import type { LegalActions } from '@/lib/poker/engine'
+import { intentFor, KEY_LIST } from '@/lib/tableKeys'
 
 // The coach touches upstream in three places: AppBoot starts it, the table mounts
 // its button and card, and Settings mounts its section. The game store has no
@@ -61,4 +63,15 @@ test('the table context derives reads the way the player dialog does', (t) => {
   )
   // And never the hidden AI profile or tonight's form.
   t.notRegex(context, /seat\.ai\b|seat\.form\b|\.bio\b/)
+})
+
+test('the coach’s keys, A and Q, stay free of the table’s own', (t) => {
+  // Every action open, so any letter the table claims would answer here.
+  const legal = { canCheck: true, canBet: true, canRaise: true, canDraw: false } as LegalActions
+  for (const key of ['a', 'A', 'q', 'Q']) t.is(intentFor({ key }, legal), null, key)
+  const listed = KEY_LIST.flatMap((entry) => entry.keys.map((key) => key.toLowerCase()))
+  t.false(listed.includes('a') || listed.includes('q'))
+  const card = code('src/components/table/AskCoach.tsx')
+  t.regex(card, /const ASK_KEY = 'a'/)
+  t.regex(card, /const REPLY_KEY = 'q'/)
 })

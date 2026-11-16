@@ -1,4 +1,4 @@
-import { COACH_MODEL, coachPrefs, streamCoach } from './coach.mjs'
+import { COACH_MODEL, coachPrefs, coachThread, streamCoach } from './coach.mjs'
 import { bearer, bodyText, hash, json, noCache, secretMatches } from './http.mjs'
 export { LiveState } from './devices.mjs'
 
@@ -11,8 +11,9 @@ export { LiveState } from './devices.mjs'
 //   POST /disconnect  Authorization: Bearer <browser token>
 //   POST /coach       Authorization: Bearer <browser token> → NDJSON answer
 
-// The question: the hand (at most a few kilobytes) and the player's settings.
-const QUESTION_MAX = 32_768
+// The question: the hand (at most a few kilobytes), the player's settings and,
+// for a follow-up, the conversation so far (at most eight more turns).
+const QUESTION_MAX = 65_536
 
 // An exception's class name only, never its message or stack: V8's JSON.parse
 // messages quote the input, and other messages can carry URLs or values.
@@ -51,9 +52,12 @@ async function coach(request, env, ctx, trace) {
   const hand = question?.hand
   if (hand === undefined || (hand !== null && (typeof hand !== 'object' || Array.isArray(hand))))
     return json({ error: 'Invalid question' }, 400)
+  const thread = coachThread(question.thread)
+  if (!thread) return json({ error: 'Invalid question' }, 400)
   const admitted = await devices(env, '/coach', request)
   if (!admitted.ok) return admitted
-  const { body, finished } = streamCoach(env, hand, coachPrefs(question.settings), request.signal)
+  const prefs = coachPrefs(question.settings)
+  const { body, finished } = streamCoach(env, hand, prefs, request.signal, thread)
   // The request line is written when the answer starts; this one when it ends.
   ctx?.waitUntil?.(
     finished.then((outcome) =>
