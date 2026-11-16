@@ -71,6 +71,25 @@ async function play(until: (status: string) => boolean, limit = 20_000) {
   return useGame.getState().status
 }
 
+/**
+ * Deal on, through handovers, until it is the hero's turn in a hand still in
+ * play. Bounded by time, not by turns: AI moves run on timers, and a count of
+ * polls can run out before enough of them fire on a fast machine. False if the
+ * run ends first.
+ */
+async function untilHeroTurn(limitMs = 10_000) {
+  const end = Date.now() + limitMs
+  while (Date.now() < end) {
+    const game = useGame.getState()
+    const { hand } = game
+    if (hand && !isHandComplete(hand) && hand.players[hand.toActIndex]?.id === 'hero') return true
+    if (game.status === 'handover') game.nextHand()
+    else if (game.status !== 'playing') return false
+    await turn()
+  }
+  return false
+}
+
 /** Sit down and shove until busted with at least three players left (so watching is offered). */
 async function bustWithAFieldLeft() {
   for (let attempt = 0; attempt < 40; attempt++) {
@@ -151,15 +170,12 @@ test.serial(
 
 test.serial('on the hero’s turn the panel’s own equity and price are in the hand', async (t) => {
   tracking(t)
-  await fast(async () => {
+  const reached = await fast(async () => {
     useGame.getState().sitDown(PUB, HERO)
-    await play((s) => {
-      const { hand } = useGame.getState()
-      return s !== 'playing' || (!!hand && hand.players[hand.toActIndex]?.id === 'hero')
-    })
+    return untilHeroTurn()
   })
+  t.true(reached, 'never reached a hero turn')
   const game = useGame.getState()
-  t.truthy(game.hand && !isHandComplete(game.hand), 'never reached a hero turn')
   const described = currentHand()!
   t.is(described.currentPlayerToAct, 'hero')
   t.is(described.hero!.equity, game.heroEquity)
@@ -226,22 +242,20 @@ test.serial(
     tracking(t)
     const { heroActions } = await import('@/lib/askCoach/table')
     t.is(heroActions({ hand: null }), 0)
-    await fast(async () => {
+    const reached = await fast(async () => {
       useGame.getState().sitDown(PUB, HERO)
-      // Wait for the player's first turn: opponents may act first, and do not count.
-      for (let i = 0; i < 2000; i++) {
-        const game = useGame.getState()
-        if (game.hand?.players[game.hand.toActIndex]?.id === 'hero') break
-        if (game.status === 'handover') game.nextHand()
-        await turn()
-      }
+      return untilHeroTurn()
     })
+    t.true(reached, 'never reached a hero turn')
     const game = useGame.getState()
-    t.is(game.hand?.players[game.hand.toActIndex]?.id, 'hero')
-    // Opponents' actions so far do not count.
-    t.is(heroActions(game), 0)
+    // Whatever the player did earlier in this hand; the next action adds one.
+    const before = heroActions(game)
     const legal = legalActions(game.hand!)!
     game.act({ type: legal.canCheck ? 'check' : 'fold' })
-    t.is(heroActions(useGame.getState()), 1)
+    const after = useGame.getState().hand!
+    t.is(heroActions({ hand: after }), before + 1)
+    // An opponent's action does not count.
+    const call = { playerId: 'ai1', street: after.street, type: 'call' as const, to: 2 }
+    t.is(heroActions({ hand: { ...after, actions: [...after.actions, call] } }), before + 1)
   },
 )
