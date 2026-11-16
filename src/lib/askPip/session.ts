@@ -1,5 +1,7 @@
 import { type CoachPrefs, coachPrefs, readCoach } from './coach'
-import { livePublisher } from './publisher'
+import { askPipConnection } from './connection'
+import type { CoachHand } from './hand'
+import { currentHand } from './table'
 
 /** Where the current answer stands. `hand` is the deal it was asked on. */
 export type AskPipState =
@@ -7,13 +9,21 @@ export type AskPipState =
   | { phase: 'asking' | 'answering' | 'done'; hand: number; text: string }
   | { phase: 'failed'; hand: number; text: string; message: string }
 
-type Ask = (prefs: CoachPrefs, signal: AbortSignal) => Promise<Response>
+/** What one question sends: the hand as it stands, and the player's settings. */
+export interface Question {
+  hand: CoachHand | null
+  settings: CoachPrefs
+}
+type Ask = (question: Question, signal: AbortSignal) => Promise<Response>
+
+/** A whole streamed answer; the service gives the model 30 seconds. */
+const ANSWER_TIMEOUT_MS = 45_000
 
 const IDLE: AskPipState = { phase: 'idle' }
 
 /**
- * One Ask Pip answer at a time, shared by the button (beside the sharing
- * badge) and the card (over the player's own hand), which sit apart on the
+ * One Ask Pip answer at a time, shared by the button (the table's top-left
+ * corner) and the card (over the player's own hand), which sit apart on the
  * table. Asking again, closing, or the deal moving on stops an answer still
  * being written, which also stops the model call on the service.
  */
@@ -23,8 +33,9 @@ export class AskPipSession {
   private listeners = new Set<() => void>()
 
   constructor(
-    private ask: Ask = (prefs, signal) => livePublisher.coach(prefs, signal),
+    private ask: Ask = (question, signal) => askPipConnection.ask(question, signal),
     private prefs: () => CoachPrefs = coachPrefs.get,
+    private hand: () => CoachHand | null = currentHand,
   ) {}
 
   get = () => this.state
@@ -46,7 +57,10 @@ export class AskPipSession {
     let text = ''
     this.set({ phase: 'asking', hand, text })
     try {
-      const response = await this.ask(this.prefs(), controller.signal)
+      // The hand at the moment of asking: the latest move is in it by construction.
+      const question = { hand: this.hand(), settings: this.prefs() }
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(ANSWER_TIMEOUT_MS)])
+      const response = await this.ask(question, signal)
       const outcome = await readCoach(response, (chunk) => {
         if (controller.signal.aborted) return
         text += chunk

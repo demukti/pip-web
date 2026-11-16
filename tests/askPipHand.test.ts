@@ -1,5 +1,5 @@
 import test from 'ava'
-import { liveSnapshot, type LiveTableContext } from '@/lib/liveCoaching/state'
+import { describeHand, type TableContext } from '@/lib/askPip/hand'
 import { mulberry32, cardToString } from '@/lib/poker/cards'
 import { evaluateHand, handPhrase } from '@/lib/poker/handEval'
 import {
@@ -11,9 +11,6 @@ import {
 } from '@/lib/poker/engine'
 
 const context = {
-  sessionId: 'test-private-session',
-  version: 1,
-  capturedAt: '2026-11-15T12:00:00.000Z',
   handNo: 1,
   heroId: 'hero',
 }
@@ -33,7 +30,7 @@ const deal = (opts: { mystery?: boolean } = {}) =>
 
 test('initial unfinished state exposes the hero, public stacks and engine legal sizes', (t) => {
   const hand = deal()
-  const result = liveSnapshot(hand, context).hand!
+  const result = describeHand(hand, context)!
   t.false(result.complete)
   t.is(result.hero?.position, 'BTN')
   t.deepEqual(result.hero?.holeCards, hand.players[0].hole.map(cardToString))
@@ -49,11 +46,11 @@ test('initial unfinished state exposes the hero, public stacks and engine legal 
 test('projection never exposes deck, opponent cards or unknown engine extensions', (t) => {
   const hand = deal()
   const extended = { ...hand, privateFutureField: 'hidden-engine-extension' }
-  const encoded = JSON.stringify(liveSnapshot(extended, context))
+  const encoded = JSON.stringify(describeHand(extended, context))
   const result = JSON.parse(encoded)
-  t.false('deck' in result.hand)
+  t.false('deck' in result)
   t.false(encoded.includes('hidden-engine-extension'))
-  for (const player of result.hand.players) {
+  for (const player of result.players) {
     t.false('hole' in player)
     t.false('mystery' in player)
   }
@@ -84,9 +81,9 @@ test('in play, no opponent card or Mystery Card appears anywhere, on any street'
   for (const mystery of [false, true]) {
     const checked = new Set<string>()
     playOut(deal({ mystery }), [], (hand) => {
-      const snapshot = liveSnapshot(hand, context)
-      const encoded = JSON.stringify(snapshot)
-      t.is(snapshot.hand!.result, null)
+      const described = describeHand(hand, context)
+      const encoded = JSON.stringify(described)
+      t.is(described!.result, null)
       for (const player of hand.players) {
         // The hero sees their own face-up cards; nobody sees a Mystery Card yet.
         const hidden =
@@ -102,7 +99,7 @@ test('in play, no opponent card or Mystery Card appears anywhere, on any street'
 test('showdown: the hands the table turned over, in seat order, and only those', (t) => {
   const hand = playOut(deal())
   t.true(hand.result!.showdown)
-  const result = liveSnapshot(hand, context).hand!.result!
+  const result = describeHand(hand, context)!.result!
   const evaluations = hand.result!.evaluations!
   t.deepEqual(result.shownHands, [
     {
@@ -132,14 +129,14 @@ test('showdown: a player who folded on the way is not shown, anywhere', (t) => {
   const hand = playOut(deal(), ['ai1'])
   t.true(hand.result!.showdown)
   t.is(hand.players[1].status, 'folded')
-  const snapshot = liveSnapshot(hand, context)
+  const described = describeHand(hand, context)
   t.deepEqual(
-    snapshot.hand!.result!.shownHands.map((shown) => shown.playerId),
+    described!.result!.shownHands.map((shown) => shown.playerId),
     ['hero', 'ai2'],
   )
-  const encoded = JSON.stringify(snapshot)
+  const encoded = JSON.stringify(described)
   for (const card of cardsOf(hand.players[1])) t.false(mentions(encoded, card))
-  for (const card of cardsOf(hand.players[2])) t.true(mentions(snapshot.hand!.brief, card))
+  for (const card of cardsOf(hand.players[2])) t.true(mentions(described!.brief, card))
 })
 
 test('won without a showdown: nothing is shown and no opponent card appears', (t) => {
@@ -149,12 +146,12 @@ test('won without a showdown: nothing is shown and no opponent card appears', (t
     hand = applyAction(hand, { type: 'raise', amount: 40 })
     hand = playOut(hand, ['hero', 'ai2'])
     t.false(hand.result!.showdown)
-    const snapshot = liveSnapshot(hand, context)
-    t.deepEqual(snapshot.hand!.result!.shownHands, [])
-    const encoded = JSON.stringify(snapshot)
+    const described = describeHand(hand, context)
+    t.deepEqual(described!.result!.shownHands, [])
+    const encoded = JSON.stringify(described)
     for (const player of hand.players.slice(1))
       for (const card of cardsOf(player)) t.false(mentions(encoded, card))
-    t.false(snapshot.hand!.brief.includes('showed'))
+    t.false(described!.brief.includes('showed'))
   }
 })
 
@@ -163,8 +160,8 @@ test('Mystery Card: the turned-over card is shown at showdown, a folded one neve
   t.true(hand.result!.showdown)
   // The folded hand keeps its Mystery Card face down.
   t.truthy(hand.players[1].mystery)
-  const snapshot = liveSnapshot(hand, context)
-  const shown = snapshot.hand!.result!.shownHands
+  const described = describeHand(hand, context)
+  const shown = described!.result!.shownHands
   t.deepEqual(
     shown.map((s) => [s.playerId, s.holeCards.length]),
     [
@@ -173,23 +170,22 @@ test('Mystery Card: the turned-over card is shown at showdown, a folded one neve
     ],
   )
   t.deepEqual(shown[1].holeCards, hand.players[2].hole.map(cardToString))
-  const encoded = JSON.stringify(snapshot)
+  const encoded = JSON.stringify(described)
   for (const card of cardsOf(hand.players[1])) t.false(mentions(encoded, card))
 })
 
-test('several real moves produce fresh unfinished snapshots without mutating earlier ones', (t) => {
+test('several real moves give fresh unfinished descriptions without mutating earlier ones', (t) => {
   let hand = deal()
-  const initial = liveSnapshot(hand, context)
+  const initial = describeHand(hand, context)
   const frozen = JSON.stringify(initial)
   const streets = new Set<string>()
   for (let i = 1; i <= 6; i++) {
     const legal = legalActions(hand)!
     hand = applyAction(hand, { type: legal.canCheck ? 'check' : 'call' })
-    const snapshot = liveSnapshot(hand, { ...context, version: i + 1 })
-    t.is(snapshot.version, i + 1)
-    t.is(snapshot.hand?.actionHistory.length, i)
-    t.false(snapshot.hand!.complete)
-    streets.add(snapshot.hand!.street)
+    const described = describeHand(hand, context)!
+    t.is(described.actionHistory.length, i)
+    t.false(described.complete)
+    streets.add(described.street)
   }
   t.true(streets.has('preflop'))
   t.true(streets.has('flop'))
@@ -200,15 +196,15 @@ test('several real moves produce fresh unfinished snapshots without mutating ear
 test('completed hands have no actor/actions and leaving clears the current hand', (t) => {
   let hand = deal()
   while (!isHandComplete(hand)) hand = applyAction(hand, { type: 'fold' })
-  const result = liveSnapshot(hand, context).hand!
+  const result = describeHand(hand, context)!
   t.true(result.complete)
   t.is(result.currentPlayerToAct, null)
   t.is(result.availableActions, null)
   t.true(result.potAwarded)
-  t.is(liveSnapshot(null, { ...context, version: 2 }).hand, null)
+  t.is(describeHand(null, context), null)
 })
 
-test('heads-up button is the small blind and metadata must be valid', (t) => {
+test('heads-up button is the small blind', (t) => {
   const hand = startHand({
     seats: [
       { id: 'hero', name: 'Hero', stack: 200 },
@@ -219,9 +215,7 @@ test('heads-up button is the small blind and metadata must be valid', (t) => {
     bigBlind: 10,
     rng: mulberry32(1),
   })
-  t.is(liveSnapshot(hand, context).hand!.hero?.position, 'BTN/SB')
-  t.throws(() => liveSnapshot(hand, { ...context, version: 0 }))
-  t.throws(() => liveSnapshot(hand, { ...context, capturedAt: 'invalid' }))
+  t.is(describeHand(hand, context)!.hero?.position, 'BTN/SB')
 })
 
 test('equity carries the existing estimate with the same rounded percentage as Pip', (t) => {
@@ -230,12 +224,12 @@ test('equity carries the existing estimate with the same rounded percentage as P
     [0.72493, '72%'],
     [1, '100%'],
   ] as const) {
-    const hero = liveSnapshot(deal(), { ...context, displayedEquity: equity }).hand!.hero!
+    const hero = describeHand(deal(), { ...context, displayedEquity: equity })!.hero!
     t.is(hero.equity, equity)
     t.is(hero.equityDisplay, display)
   }
   for (const equity of [null, undefined, NaN, Infinity, -0.1, 1.1]) {
-    const hero = liveSnapshot(deal(), { ...context, displayedEquity: equity }).hand!.hero!
+    const hero = describeHand(deal(), { ...context, displayedEquity: equity })!.hero!
     t.is(hero.equity, null)
     t.is(hero.equityDisplay, '—')
   }
@@ -244,27 +238,27 @@ test('equity carries the existing estimate with the same rounded percentage as P
 test('a prior-turn estimate is never carried into an AI turn or a finished hand', (t) => {
   const aiTurn = applyAction(deal(), { type: 'call' })
   t.not(aiTurn.players[aiTurn.toActIndex].id, 'hero')
-  t.is(liveSnapshot(aiTurn, { ...context, displayedEquity: 0.72 }).hand!.hero!.equity, null)
+  t.is(describeHand(aiTurn, { ...context, displayedEquity: 0.72 })!.hero!.equity, null)
   let complete = deal()
   while (!isHandComplete(complete)) complete = applyAction(complete, { type: 'fold' })
-  t.is(liveSnapshot(complete, { ...context, displayedEquity: 0.72 }).hand!.hero!.equity, null)
+  t.is(describeHand(complete, { ...context, displayedEquity: 0.72 })!.hero!.equity, null)
 })
 
 test('hero price fields: stack, engine call amount and pot odds on the hero turn only', (t) => {
-  const preflop = liveSnapshot(deal(), context).hand!
+  const preflop = describeHand(deal(), context)!
   t.is(preflop.hero?.stack, 200)
   t.is(preflop.hero?.toCall, 10)
   // 10 to call into 15: 10 / (15 + 10).
   t.is(preflop.hero?.potOdds, 0.4)
   let hand = applyAction(deal(), { type: 'call' })
-  const aiTurn = liveSnapshot(hand, context).hand!
+  const aiTurn = describeHand(hand, context)!
   t.is(aiTurn.hero?.stack, 190)
   t.is(aiTurn.hero?.toCall, null)
   t.is(aiTurn.hero?.potOdds, null)
   hand = applyAction(applyAction(hand, { type: 'call' }), { type: 'check' })
   hand = applyAction(hand, { type: 'check' })
   hand = applyAction(hand, { type: 'check' })
-  const check = liveSnapshot(hand, context).hand!
+  const check = describeHand(hand, context)!
   t.is(check.currentPlayerToAct, 'hero')
   t.is(check.hero?.toCall, 0)
   t.is(check.hero?.potOdds, null)
@@ -274,7 +268,7 @@ test('pot odds are the call over the pot after calling', (t) => {
   let hand = applyAction(deal(), { type: 'call' })
   hand = applyAction(applyAction(hand, { type: 'call' }), { type: 'check' })
   hand = applyAction(applyAction(hand, { type: 'bet', amount: 20 }), { type: 'call' })
-  const result = liveSnapshot(hand, context).hand!
+  const result = describeHand(hand, context)!
   t.is(result.pot, 70)
   t.is(result.hero?.toCall, legalActions(hand)!.callAmount)
   t.is(result.hero?.toCall, 20)
@@ -284,7 +278,7 @@ test('pot odds are the call over the pot after calling', (t) => {
 test('action history names each actor and their position', (t) => {
   let hand = applyAction(deal(), { type: 'call' })
   hand = applyAction(hand, { type: 'fold' })
-  t.deepEqual(liveSnapshot(hand, context).hand!.actionHistory, [
+  t.deepEqual(describeHand(hand, context)!.actionHistory, [
     {
       playerId: 'hero',
       street: 'preflop',
@@ -308,7 +302,7 @@ test('brief: preflop on the hero turn', (t) => {
   const hand = deal()
   const [a, b] = hand.players[0].hole.map(cardToString)
   t.is(
-    liveSnapshot(hand, { ...context, displayedEquity: 0.72 }).hand!.brief,
+    describeHand(hand, { ...context, displayedEquity: 0.72 })!.brief,
     `Hand 1, preflop. You are BTN with ${a} ${b}, 200 behind. Pot 15. Your turn: 10 to call, pot odds 40%. Equity 72%.`,
   )
 })
@@ -320,7 +314,7 @@ test('brief: facing a bet on the flop', (t) => {
   const [a, b] = hand.players[0].hole.map(cardToString)
   const board = hand.community.map(cardToString).join(' ')
   t.is(
-    liveSnapshot(hand, { ...context, handNo: 12, displayedEquity: 0.5 }).hand!.brief,
+    describeHand(hand, { ...context, handNo: 12, displayedEquity: 0.5 })!.brief,
     `Hand 12, flop. You are BTN with ${a} ${b}, 190 behind. Board ${board}. You have a pair. Pot 70. Your turn: 20 to call, pot odds 22%. Equity 50%.`,
   )
 })
@@ -330,7 +324,7 @@ test('brief: completed hands report the public result only', (t) => {
   while (!isHandComplete(folded)) folded = applyAction(folded, { type: 'fold' })
   const [a, b] = folded.players[0].hole.map(cardToString)
   t.is(
-    liveSnapshot(folded, context).hand!.brief,
+    describeHand(folded, context)!.brief,
     `Hand 1, complete. You are BTN with ${a} ${b}, 200 behind. You folded. Two won 15 without a showdown.`,
   )
   let shown = deal()
@@ -338,7 +332,7 @@ test('brief: completed hands report the public result only', (t) => {
     const legal = legalActions(shown)!
     shown = applyAction(shown, { type: legal.canCheck ? 'check' : 'call' })
   }
-  const brief = liveSnapshot(shown, context).hand!.brief
+  const brief = describeHand(shown, context)!.brief
   const board = shown.community.map(cardToString).join(' ')
   const [one, two] = shown.players.slice(1).map((player) => cardsOf(player).join(' '))
   // At showdown the brief says what the table turned over, and nothing more.
@@ -350,26 +344,26 @@ test('brief: completed hands report the public result only', (t) => {
 
 test('brief: waiting on an AI, nothing to call, absent hero, never currency', (t) => {
   const aiTurn = applyAction(deal(), { type: 'call' })
-  t.true(liveSnapshot(aiTurn, context).hand!.brief.endsWith('Pot 25. One (SB) to act.'))
+  t.true(describeHand(aiTurn, context)!.brief.endsWith('Pot 25. One (SB) to act.'))
   let hand = applyAction(applyAction(aiTurn, { type: 'call' }), { type: 'check' })
   hand = applyAction(applyAction(hand, { type: 'check' }), { type: 'check' })
-  t.true(liveSnapshot(hand, context).hand!.brief.endsWith('Your turn, nothing to call.'))
-  const absent = liveSnapshot(deal(), { ...context, heroId: 'nobody' }).hand!
+  t.true(describeHand(hand, context)!.brief.endsWith('Your turn, nothing to call.'))
+  const absent = describeHand(deal(), { ...context, heroId: 'nobody' })!
   t.is(absent.hero, null)
   t.is(absent.brief, 'Hand 1, preflop. You are not in this hand. Pot 15. Hero (BTN) to act.')
-  for (const snapshot of [aiTurn, hand, deal()])
-    t.false(/\$|dollar|usd|€|£/i.test(liveSnapshot(snapshot, context).hand!.brief))
+  for (const described of [aiTurn, hand, deal()])
+    t.false(/\$|dollar|usd|€|£/i.test(describeHand(described, context)!.brief))
 })
 
 test('lastEquity keeps the latest hero-turn estimate separately from equity', (t) => {
-  const heroTurn = liveSnapshot(deal(), { ...context, displayedEquity: 0.72 }).hand!.hero!
+  const heroTurn = describeHand(deal(), { ...context, displayedEquity: 0.72 })!.hero!
   t.deepEqual(heroTurn.lastEquity, { equity: 0.72, equityDisplay: '72%', street: 'preflop' })
   const aiTurn = applyAction(deal(), { type: 'call' })
-  const remembered = liveSnapshot(aiTurn, {
+  const remembered = describeHand(aiTurn, {
     ...context,
     displayedEquity: 0.72,
     lastEquity: { equity: 0.72, street: 'preflop' },
-  }).hand!
+  })!
   t.is(remembered.hero!.equity, null)
   t.is(remembered.hero!.equityDisplay, '—')
   t.deepEqual(remembered.hero!.lastEquity, {
@@ -384,22 +378,22 @@ test('lastEquity keeps the latest hero-turn estimate separately from equity', (t
     { equity: 1.2, street: 'flop' },
     { equity: NaN, street: 'flop' },
   ])
-    t.is(liveSnapshot(aiTurn, { ...context, lastEquity: bad }).hand!.hero!.lastEquity, null)
+    t.is(describeHand(aiTurn, { ...context, lastEquity: bad })!.hero!.lastEquity, null)
 })
 
 test('hero.handName names the made hand from the flop on, as the felt does', (t) => {
   const preflop = deal()
-  t.is(liveSnapshot(preflop, context).hand!.hero!.handName, null)
+  t.is(describeHand(preflop, context)!.hero!.handName, null)
   // The preflop nickname ("Pocket Rockets") is the felt's, not a made hand.
-  t.false(liveSnapshot(preflop, context).hand!.brief.includes('You have'))
+  t.false(describeHand(preflop, context)!.brief.includes('You have'))
   const streets = new Set<string>()
   playOut(deal(), [], (hand) => {
-    const snapshot = liveSnapshot(hand, context).hand!
+    const described = describeHand(hand, context)!
     const hero = hand.players[0]
     const expected =
       hand.community.length >= 3 ? evaluateHand(hero.hole, hand.community, hand.variant) : null
-    t.is(snapshot.hero!.handName, expected?.name ?? null)
-    if (expected) t.true(snapshot.brief.includes(`You have ${handPhrase(expected)}.`))
+    t.is(described.hero!.handName, expected?.name ?? null)
+    if (expected) t.true(described.brief.includes(`You have ${handPhrase(expected)}.`))
     streets.add(hand.street)
   })
   t.deepEqual([...streets], ['preflop', 'flop', 'turn', 'river'])
@@ -411,10 +405,10 @@ test('hero.handName: no brief clause once the hero folds or the hand is over', (
   hand = applyAction(hand, { type: 'call' })
   hand = applyAction(hand, { type: 'check' })
   t.is(hand.street, 'flop')
-  const folded = liveSnapshot(hand, context).hand!
+  const folded = describeHand(hand, context)!
   t.is(typeof folded.hero!.handName, 'string')
   t.false(folded.brief.includes('You have'))
-  const done = liveSnapshot(playOut(deal()), context).hand!
+  const done = describeHand(playOut(deal()), context)!
   t.is(typeof done.hero!.handName, 'string')
   t.false(done.brief.includes('You have'))
 })
@@ -423,13 +417,13 @@ test('Mystery Card: no made hand is named while a hole card is face down', (t) =
   let checked = 0
   playOut(deal({ mystery: true }), [], (hand) => {
     if (hand.players[0].hole.length >= 2) return
-    t.is(liveSnapshot(hand, context).hand!.hero!.handName, null)
+    t.is(describeHand(hand, context)!.hero!.handName, null)
     checked++
   })
   t.true(checked > 0)
 })
 
-const table = (over: Partial<LiveTableContext> = {}): LiveTableContext => ({
+const table = (over: Partial<TableContext> = {}): TableContext => ({
   venue: 'The Back Room',
   format: 'tournament',
   blindLevel: 2,
@@ -445,13 +439,13 @@ const table = (over: Partial<LiveTableContext> = {}): LiveTableContext => ({
 })
 
 test('players carry the style line and reads the table shows; none without a context', (t) => {
-  const bare = liveSnapshot(deal(), context).hand!
+  const bare = describeHand(deal(), context)!
   t.is(bare.table, null)
   for (const player of bare.players) {
     t.is(player.style, null)
     t.deepEqual(player.reads, [])
   }
-  const result = liveSnapshot(deal(), { ...context, table: table() }).hand!
+  const result = describeHand(deal(), { ...context, table: table() })!
   t.deepEqual(
     result.players.map((player) => [player.playerId, player.style, player.reads]),
     [
@@ -470,9 +464,9 @@ test('hand.table: venue, format, level, status and place, and nothing else', (t)
     players: {
       ai1: { style: 'Loose', reads: [], ai: { hiddenSkill: 0.937531 }, form: 'hidden-form' },
     },
-  } as unknown as LiveTableContext
-  const snapshot = liveSnapshot(deal(), { ...context, table: extended })
-  t.deepEqual(snapshot.hand!.table, {
+  } as unknown as TableContext
+  const described = describeHand(deal(), { ...context, table: extended })
+  t.deepEqual(described!.table, {
     venue: 'The Back Room',
     format: 'tournament',
     blindLevel: 2,
@@ -480,15 +474,15 @@ test('hand.table: venue, format, level, status and place, and nothing else', (t)
     place: null,
     scoreHands: null,
   })
-  const encoded = JSON.stringify(snapshot)
+  const encoded = JSON.stringify(described)
   for (const hidden of ['hiddenSkill', 'hiddenLooseness', '0.937531', 'hidden-form'])
     t.false(encoded.includes(hidden), hidden)
 })
 
 test('brief: a finished run says so; a run in progress says nothing', (t) => {
   const done = playOut(deal())
-  const brief = (over: Partial<LiveTableContext>) =>
-    liveSnapshot(done, { ...context, table: table(over) }).hand!.brief
+  const brief = (over: Partial<TableContext>) =>
+    describeHand(done, { ...context, table: table(over) })!.brief
   t.true(brief({ status: 'busted', place: 3 }).endsWith(' You are out in 3rd.'))
   t.true(brief({ status: 'won', place: 1 }).endsWith(' You won the table.'))
   t.true(
@@ -499,14 +493,14 @@ test('brief: a finished run says so; a run in progress says nothing', (t) => {
       ` The game is over: you finish with ${done.players[0].stack} chips.`,
     ),
   )
-  const plain = liveSnapshot(done, context).hand!.brief
+  const plain = describeHand(done, context)!.brief
   for (const status of ['playing', 'handover'] as const) t.is(brief({ status }), plain)
   // Watching the rest after busting: the hero is out of the hand being played.
-  const watching = liveSnapshot(deal(), {
+  const watching = describeHand(deal(), {
     ...context,
     heroId: 'nobody',
     table: table({ status: 'watching', place: 4 }),
-  }).hand!.brief
+  })!.brief
   t.true(watching.endsWith(' You are out in 4th, watching the table play out.'))
   for (const status of ['busted', 'won', 'scored', 'watching'] as const)
     t.false(/\$|dollar|usd|€|£/i.test(brief({ status, place: 2 })))

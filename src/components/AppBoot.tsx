@@ -8,8 +8,7 @@ import { soundPackById } from '@/config/cosmetics'
 import { haptics } from '@/lib/haptics'
 import { inApp } from '@/lib/nativeApp'
 import { sound } from '@/lib/sound'
-import { livePublisher } from '@/lib/liveCoaching/publisher'
-import { startTableContext } from '@/lib/liveCoaching/tableContext'
+import { startAskPip } from '@/lib/askPip/table'
 
 /**
  * One-time client boot work, mounted from the root layout:
@@ -25,9 +24,9 @@ import { startTableContext } from '@/lib/liveCoaching/tableContext'
  */
 export function AppBoot() {
   useEffect(() => {
-    const stopSharing = livePublisher.start()
-    // The table around the shared hand: venue, blind level, run status, reads.
-    const stopTableContext = startTableContext()
+    // Ask Pip remembers what the game store forgets: a spectator's finishing
+    // place and the hand's last equity estimate.
+    const stopAskPip = startAskPip()
     void navigator.storage?.persist?.().catch(() => {})
 
     const profile = useProfile.getState()
@@ -71,8 +70,7 @@ export function AppBoot() {
 
     return () => {
       sound.onPlay(null)
-      stopSharing()
-      stopTableContext()
+      stopAskPip()
     }
   }, [])
   return null

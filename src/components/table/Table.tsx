@@ -19,7 +19,6 @@ import { HandHistoryDialog } from './HandHistoryDialog'
 import { HandsHelpDialog } from './HandsHelpDialog'
 import { LeaveDialog } from './LeaveDialog'
 import { AskPipButton, AskPipCard } from './AskPip'
-import { LiveCoachingBadge } from './LiveCoachingBadge'
 import { PlayerDialog } from './PlayerDialog'
 import { RunRecap } from './RunRecap'
 import { useGame } from '@/store/game'
@@ -186,7 +185,7 @@ export function Table() {
   // exist next to "nothing you can buy changes a hand" (pip-web#120).
   const spectating = status === 'watching'
   // The one reveal rule for every seat: the engine's showdown reveal (shared
-  // with the hand record and the live-coaching snapshot), widened only for a
+  // with the hand record and Ask Pip's hand description), widened only for a
   // spectator.
   const revealAll = (p: Player) =>
     showsHoleCards(hand, p) || (spectating && p.status !== 'folded' && p.status !== 'out')
@@ -478,18 +477,18 @@ export function Table() {
               {talkLine}
             </div>
 
-            {/* Live coaching, only while sharing: the stage's top-left corner is
-                outside the oval, so it covers nothing and moves nothing. Ask Pip's
-                answer opens over the hero's own row, below. */}
-            <div className="absolute left-2 top-0 z-10 flex flex-col items-start gap-1.5">
-              <LiveCoachingBadge />
-              <AskPipButton hand={handIndex} />
-            </div>
+            {/* Ask Pip, once this browser is signed in: the stage's top-left
+                corner is outside the oval, so it covers nothing and moves
+                nothing. The answer opens over the hero's own row, below. */}
+            <AskPipButton hand={handIndex} className="absolute left-2 top-0 z-10" />
           </div>
 
-          {/* the hero, at the near rail; Ask Pip's answer lies over this row */}
+          {/* the hero, at the near rail. The box positions Ask Pip's answer over
+              this row; it takes no z-index of its own, so the answer stacks
+              against the whole table (over the hand's result banner, under the
+              end-of-run overlay) while each row keeps its own z-20. */}
           {hero && heroMeta && (
-            <div className="relative z-20">
+            <div className="relative">
               {isMobile ? (
                 hand.variant === 'draw' ? (
                   /* **Five cards do not fit beside the panel on a phone.** The row

@@ -1,7 +1,7 @@
 /**
- * Ask Pip: an on-demand coaching answer for the hand in front of you, streamed
- * from the live-state service (`live-state/coach.mjs`). Nothing is asked unless
- * the player presses the button; nothing here imports a store or React.
+ * Ask Pip's coaching settings and its answer format. The answer streams from the
+ * service (`live-state/coach.mjs`) as NDJSON; nothing here imports a store or
+ * React.
  */
 
 export type CoachStyle = 'short' | 'standard' | 'teach'
@@ -18,7 +18,7 @@ export const COACH_STYLES: { value: CoachStyle; label: string; sub: string }[] =
 ]
 export const NOTES_MAX = 500
 
-const KEY = 'pip.live-coach.v1'
+const KEY = 'pip.ask-pip-settings.v1'
 const DEFAULT_PREFS: CoachPrefs = { style: 'standard', notes: '' }
 type Storage = Pick<globalThis.Storage, 'getItem' | 'setItem'>
 
@@ -74,8 +74,7 @@ export type CoachOutcome = { ok: true } | { ok: false; message: string }
 function refusal(status: number, code: unknown): string {
   if (code === 'coach_limit') return 'That’s a lot of questions for one minute. Try again shortly.'
   if (code === 'coach_off') return 'Ask Pip isn’t set up on your service yet.'
-  if (code === 'writer_changed') return 'Another tab is sharing now. Ask from that one.'
-  if (status === 401 || status === 403) return 'Sharing has ended. Reconnect in Settings.'
+  if (status === 401) return 'You were signed out. Sign in again in Settings.'
   return 'Pip couldn’t answer. Ask again.'
 }
 

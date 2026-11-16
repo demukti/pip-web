@@ -83,7 +83,6 @@ import { formatChips } from '@/lib/useMoney'
 import { countHand } from '@/lib/handTally'
 import { notePlayedThisWeek } from '@/lib/returning'
 import { useProfile } from './profile'
-import { livePublisher } from '@/lib/liveCoaching/publisher'
 
 export interface SeatMeta {
   id: string
@@ -801,7 +800,6 @@ export const useGame = create<GameState>((set, get) => {
     }
 
     if (isHandComplete(hand)) {
-      livePublisher.capture(hand.variant === 'holdem' ? hand : null, get().handIndex)
       finishHand()
       return
     }
@@ -811,12 +809,6 @@ export const useGame = create<GameState>((set, get) => {
 
     if (toAct.id === HUMAN_ID) {
       set({ aiThinkingId: null, heroEquity: computeHeroEquity(hand) })
-      // Publish the exact estimate the panel received, after it has been computed.
-      livePublisher.capture(
-        hand.variant === 'holdem' ? hand : null,
-        get().handIndex,
-        get().heroEquity,
-      )
       sound.play('turn')
       return
     }
@@ -834,7 +826,6 @@ export const useGame = create<GameState>((set, get) => {
         : AI_DELAY_FOLDED
 
     set({ aiThinkingId: toAct.id, heroEquity: null })
-    livePublisher.capture(hand.variant === 'holdem' ? hand : null, get().handIndex)
     turnTimer = setTimeout(() => {
       const cur = get().hand
       if (!cur || isHandComplete(cur)) return
@@ -1625,7 +1616,6 @@ export const useGame = create<GameState>((set, get) => {
     },
 
     leave: () => {
-      livePublisher.capture(null, 0)
       clearTimers()
       clearTableSnapshot()
       armDaily(null)

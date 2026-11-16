@@ -1,5 +1,26 @@
 # Pip Live coaching
 
+> **Archived (2026-11-16).** Pip Live, the ChatGPT coaching, was replaced by
+> [Ask Pip](../ask-pip.md), which coaches inside the game in one model pass. This page
+> describes the code at the tag `archive/chatgpt-live` (commit `50fb222`, the Worker
+> deployed on 2026-11-16 as version `1595168f`), not the code on `main`.
+>
+> **Left outside the repo** while archived:
+>
+> - Cloudflare keeps the OAuth KV namespace `pip-live-state-oauth`
+>   (`2887fef7714c41759b7ae2dd22c887d7`) for a restore. If you will never go back,
+>   delete it: `corepack pnpm exec wrangler kv namespace delete --namespace-id 2887fef7714c41759b7ae2dd22c887d7`.
+> - The **Pip Live** plugin in ChatGPT no longer has a service behind it: remove it there.
+> - Codex: `codex mcp remove pip-live`.
+>
+> **To restore it:** `git revert` the commit that switched to Ask Pip (or branch from
+> the tag: `git switch -c chatgpt-live archive/chatgpt-live`), run `pnpm install`, then
+> `wrangler deploy` as below; the reverted config points at the same KV namespace and
+> URL, and the secret `OWNER_KEY` carries over. The Durable Object's ChatGPT-era
+> records were deleted by Ask Pip, so start sharing again in Settings. Then reconnect
+> the Pip Live plugin in ChatGPT (and `codex mcp add pip-live --url
+> https://pip-live-state.tizav.workers.dev/mcp`), and refresh its tool metadata.
+
 Status (2026-11-15): the private service and the game are live with the code as of
 `624c521`, which includes `cc2e06b` (the tool description explains showdown cards)
 and the batch recorded as Batch E in

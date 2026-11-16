@@ -763,7 +763,7 @@ export const isHandComplete = (state: HandState): boolean => state.street === 'c
  * Whether a finished hand turned this player's hole cards face up: the hand
  * ended at a real showdown and the player was still in it (live or all in).
  *
- * The one rule the felt, the hand record and the live-coaching snapshot share,
+ * The one rule the felt, the hand record and Ask Pip's hand description share,
  * so what is shown cannot drift between them. Never a folded hand, never a
  * seat that was not dealt in, nothing when the pot went without a showdown,
  * and nothing while the hand is in play (`result` is null until it ends). A

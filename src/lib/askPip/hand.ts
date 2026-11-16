@@ -1,5 +1,6 @@
-// Explicit, hero-visible projection of the engine. Never serialize HandState
-// directly: it contains the undealt deck and every opponent's private cards.
+// The hand as Ask Pip's coach sees it: an explicit, hero-visible projection of
+// the engine, built when the player asks. Never serialize HandState directly: it
+// contains the undealt deck and every opponent's private cards.
 import { cardToString } from '@/lib/poker/cards'
 import {
   isHandComplete,
@@ -13,29 +14,22 @@ import { ordinal } from '@/lib/recap'
 import { formatWinPct } from '@/lib/utils'
 
 /** The run's state as the game store names it (`GameStatus`). */
-export type LiveRunStatus =
-  | 'idle'
-  | 'playing'
-  | 'handover'
-  | 'busted'
-  | 'won'
-  | 'watching'
-  | 'scored'
+export type RunStatus = 'idle' | 'playing' | 'handover' | 'busted' | 'won' | 'watching' | 'scored'
 
 /**
  * What the player can see about the table and the run around the hand: the
  * header (venue, blinds level, "Hand N of M") and, per seat, what opening that
- * player shows (their style line and "Your reads"). Supplied by the app at
- * capture time (`tableContext.ts`); absent in Node, where no store exists.
+ * player shows (their style line and "Your reads"). Read from the stores when
+ * the player asks (`table.ts`); absent in Node, where no store exists.
  */
-export interface LiveTableContext {
+export interface TableContext {
   /** The venue's display name. */
   venue: string
   /** `score` is a quick game played for a score (`Venue.scoreHands`); `cash` a ring table. */
   format: 'tournament' | 'cash' | 'score'
   /** 1-based, as the header's "L2". */
   blindLevel: number
-  status: LiveRunStatus
+  status: RunStatus
   /** Tournament finishing place once the run is over (1 = won it); otherwise null. */
   place: number | null
   /** Hands a score game deals ("Hand N of M"); null at every other table. */
@@ -44,21 +38,18 @@ export interface LiveTableContext {
   players: Record<string, { style: string | null; reads: string[] }>
 }
 
-export interface LiveSnapshotContext {
-  sessionId: string
-  version: number
-  capturedAt: string
+export interface HandContext {
   handNo: number
   heroId: string
   /** Exact estimate already computed for Pip's odds panel, never recomputed here. */
   displayedEquity?: number | null
   /**
-   * The most recent hero-turn estimate earlier in THIS hand, remembered by the
-   * publisher so "how's my hand?" during an AI turn still has a number.
+   * The most recent hero-turn estimate earlier in THIS hand, remembered by
+   * `table.ts` so "how's my hand?" during an AI turn still has a number.
    */
   lastEquity?: { equity: number; street: string } | null
-  /** The table around the hand, read by the publisher's context provider. */
-  table?: LiveTableContext | null
+  /** The table around the hand, read from the stores (`table.ts`). */
+  table?: TableContext | null
 }
 
 const validEquity = (value: unknown): value is number =>
@@ -66,8 +57,8 @@ const validEquity = (value: unknown): value is number =>
 
 /**
  * The estimate, when it is the hero's turn in an unfinished hand and the value
- * is a probability; otherwise null. Shared with the publisher, which remembers
- * it as `lastEquity`.
+ * is a probability; otherwise null. Shared with `table.ts`, which remembers it
+ * as `lastEquity`.
  */
 export function heroTurnEquity(
   hand: HandState,
@@ -113,22 +104,11 @@ function positions(hand: HandState): Map<string, string> {
 }
 
 /**
- * Schema v1 uses chip units, independent of Pip's cosmetic money display.
- * `version` is allocated by the eventual publisher, not inferred from actions:
- * deals, leaving a table and reconnecting also need distinct snapshots.
+ * The hand as the coach is told it, in chip units (independent of Pip's
+ * cosmetic money display), or null when no Hold'em hand is in play.
  */
-export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContext) {
-  if (!Number.isSafeInteger(context.version) || context.version < 1) {
-    throw new Error('Snapshot version must be a positive safe integer')
-  }
-  if (!Number.isFinite(Date.parse(context.capturedAt))) throw new Error('Invalid capture time')
-  const envelope = {
-    schemaVersion: 1 as const,
-    sessionId: context.sessionId,
-    version: context.version,
-    capturedAt: context.capturedAt,
-  }
-  if (!hand) return { ...envelope, hand: null }
+export function describeHand(hand: HandState | null, context: HandContext) {
+  if (!hand) return null
   const seatPositions = positions(hand)
   const hero = hand.players.find((player) => player.id === context.heroId)
   const complete = isHandComplete(hand)
@@ -174,118 +154,117 @@ export function liveSnapshot(hand: HandState | null, context: LiveSnapshotContex
     ]
   })
   return {
-    ...envelope,
-    hand: {
-      number: context.handNo,
-      variant: hand.variant,
+    number: context.handNo,
+    variant: hand.variant,
+    complete,
+    street: hand.street,
+    buttonPlayerId: hand.players[hand.buttonIndex]?.id ?? null,
+    smallBlind: hand.smallBlind,
+    bigBlind: hand.bigBlind,
+    blindPosts,
+    hero: hero
+      ? {
+          playerId: hero.id,
+          position: seatPositions.get(hero.id) ?? null,
+          holeCards: hero.hole.map(cardToString),
+          handName: made?.name ?? null,
+          equity,
+          equityDisplay: formatWinPct(equity),
+          lastEquity,
+          stack: hero.stack,
+          toCall,
+          potOdds,
+        }
+      : null,
+    communityCards: hand.community.map(cardToString),
+    // The engine's potSize is contributions across all streets. After
+    // completion it describes the contested pot, which has been awarded.
+    pot,
+    potAwarded: complete,
+    players: hand.players.map((player) => ({
+      playerId: player.id,
+      name: player.name,
+      position: seatPositions.get(player.id) ?? null,
+      status: player.status,
+      stack: player.stack,
+      committedThisStreet: player.committedThisStreet,
+      committedThisHand: player.committedThisHand,
+      // What opening this player at the table shows: the style line and
+      // "Your reads", never the AI's hidden profile. Nobody reads the hero.
+      style: table?.players[player.id]?.style ?? null,
+      reads: player.id === context.heroId ? [] : [...(table?.players[player.id]?.reads ?? [])],
+    })),
+    // Remaining chips behind, excluding chips already committed. Per-opponent
+    // values avoid inventing a single effective stack for a multiway pot.
+    effectiveRemainingStacks: hero
+      ? hand.players
+          .filter(
+            (player) =>
+              player.id !== hero.id && player.status !== 'folded' && player.status !== 'out',
+          )
+          .map((player) => ({
+            opponentId: player.id,
+            chips: Math.min(hero.stack, player.stack),
+          }))
+      : [],
+    currentBet: hand.currentBet,
+    currentPlayerToAct: actor,
+    // These legal sizes belong to the current actor, which may be an AI.
+    // Bet/raise amounts are TOTAL commitment this street; callAmount is the
+    // additional chips to pay, already capped at the actor's remaining stack.
+    availableActions: legal ? { playerId: actor, ...legal } : null,
+    actionHistory: (hand.actions ?? []).map((action) => ({
+      playerId: action.playerId,
+      street: action.street,
+      type: action.type,
+      committedTo: action.to,
+      name: hand.players.find((player) => player.id === action.playerId)?.name ?? null,
+      position: seatPositions.get(action.playerId) ?? null,
+    })),
+    // Public results only: never the evaluations wholesale (the table names
+    // only the hero's and the winning hand), never the review format's
+    // all-player hole array. `shownHands` is what the felt turned face up.
+    result: hand.result
+      ? {
+          showdown: hand.result.showdown,
+          payouts: { ...hand.result.payouts },
+          potsAwarded: hand.result.potsAwarded.map((pot) => ({
+            amount: pot.amount,
+            winners: [...pot.winners],
+          })),
+          shownHands,
+        }
+      : null,
+    table: table
+      ? {
+          venue: table.venue,
+          format: table.format,
+          blindLevel: table.blindLevel,
+          status: table.status,
+          place: table.place,
+          scoreHands: table.scoreHands,
+        }
+      : null,
+    brief: brief(hand, {
+      handNo: context.handNo,
       complete,
-      street: hand.street,
-      buttonPlayerId: hand.players[hand.buttonIndex]?.id ?? null,
-      smallBlind: hand.smallBlind,
-      bigBlind: hand.bigBlind,
-      blindPosts,
-      hero: hero
-        ? {
-            playerId: hero.id,
-            position: seatPositions.get(hero.id) ?? null,
-            holeCards: hero.hole.map(cardToString),
-            handName: made?.name ?? null,
-            equity,
-            equityDisplay: formatWinPct(equity),
-            lastEquity,
-            stack: hero.stack,
-            toCall,
-            potOdds,
-          }
-        : null,
-      communityCards: hand.community.map(cardToString),
-      // The engine's potSize is contributions across all streets. After
-      // completion it describes the contested pot, which has been awarded.
+      actor,
+      hero,
+      heroPosition: hero ? (seatPositions.get(hero.id) ?? null) : null,
+      positions: seatPositions,
       pot,
-      potAwarded: complete,
-      players: hand.players.map((player) => ({
-        playerId: player.id,
-        name: player.name,
-        position: seatPositions.get(player.id) ?? null,
-        status: player.status,
-        stack: player.stack,
-        committedThisStreet: player.committedThisStreet,
-        committedThisHand: player.committedThisHand,
-        // What opening this player at the table shows: the style line and
-        // "Your reads", never the AI's hidden profile. Nobody reads the hero.
-        style: table?.players[player.id]?.style ?? null,
-        reads: player.id === context.heroId ? [] : [...(table?.players[player.id]?.reads ?? [])],
-      })),
-      // Remaining chips behind, excluding chips already committed. Per-opponent
-      // values avoid inventing a single effective stack for a multiway pot.
-      effectiveRemainingStacks: hero
-        ? hand.players
-            .filter(
-              (player) =>
-                player.id !== hero.id && player.status !== 'folded' && player.status !== 'out',
-            )
-            .map((player) => ({
-              opponentId: player.id,
-              chips: Math.min(hero.stack, player.stack),
-            }))
-        : [],
-      currentBet: hand.currentBet,
-      currentPlayerToAct: actor,
-      // These legal sizes belong to the current actor, which may be an AI.
-      // Bet/raise amounts are TOTAL commitment this street; callAmount is the
-      // additional chips to pay, already capped at the actor's remaining stack.
-      availableActions: legal ? { playerId: actor, ...legal } : null,
-      actionHistory: (hand.actions ?? []).map((action) => ({
-        playerId: action.playerId,
-        street: action.street,
-        type: action.type,
-        committedTo: action.to,
-        name: hand.players.find((player) => player.id === action.playerId)?.name ?? null,
-        position: seatPositions.get(action.playerId) ?? null,
-      })),
-      // Public results only: never the evaluations wholesale (the table names
-      // only the hero's and the winning hand), never the review format's
-      // all-player hole array. `shownHands` is what the felt turned face up.
-      result: hand.result
-        ? {
-            showdown: hand.result.showdown,
-            payouts: { ...hand.result.payouts },
-            potsAwarded: hand.result.potsAwarded.map((pot) => ({
-              amount: pot.amount,
-              winners: [...pot.winners],
-            })),
-            shownHands,
-          }
-        : null,
-      table: table
-        ? {
-            venue: table.venue,
-            format: table.format,
-            blindLevel: table.blindLevel,
-            status: table.status,
-            place: table.place,
-            scoreHands: table.scoreHands,
-          }
-        : null,
-      brief: brief(hand, {
-        handNo: context.handNo,
-        complete,
-        actor,
-        hero,
-        heroPosition: hero ? (seatPositions.get(hero.id) ?? null) : null,
-        positions: seatPositions,
-        pot,
-        toCall,
-        potOdds,
-        equity,
-        lastEquity,
-        shownHands,
-        made,
-        table,
-      }),
-    },
+      toCall,
+      potOdds,
+      equity,
+      lastEquity,
+      shownHands,
+      made,
+      table,
+    }),
   }
 }
+
+export type CoachHand = NonNullable<ReturnType<typeof describeHand>>
 
 type ShownHand = {
   playerId: string
@@ -346,7 +325,7 @@ function brief(
     lastEquity: { equityDisplay: string; street: string } | null
     shownHands: ShownHand[]
     made: EvaluatedHand | null
-    table: LiveTableContext | null
+    table: TableContext | null
   },
 ): string {
   const { hero, complete } = facts
@@ -408,7 +387,7 @@ function brief(
 
 /** How the run stands once it is over; null while it goes on. */
 function runClause(
-  table: LiveTableContext | null,
+  table: TableContext | null,
   hero: HandState['players'][number] | undefined,
 ): string | null {
   if (!table) return null
@@ -426,5 +405,3 @@ function runClause(
       return null
   }
 }
-
-export type LiveSnapshot = ReturnType<typeof liveSnapshot>

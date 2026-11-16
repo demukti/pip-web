@@ -1,7 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk'
 
-// On-demand table coaching: the player presses Ask Pip, the Worker reads the
-// stored snapshot and streams one Claude answer back. One model pass, no tools.
+// On-demand table coaching: the player presses Ask Pip, the game sends the hand
+// as it stands, and the Worker streams one Claude answer back. One model pass, no
+// tools.
 // Measured 2026-11-16 on four spots: first words in 0.6–1.0 s, done in 1.6–2.7 s
 // (Haiku 5.5 was no faster and got a straight's outs wrong; Opus 5.5 took 2.3–3.1 s
 // to start).
@@ -11,14 +12,13 @@ const MAX_TOKENS = 1024
 // Fixed text, no per-request values, so every request sends the same prefix. It is
 // below the model's minimum cacheable length, so it is not marked for caching.
 export const COACH_SYSTEM = `You are Pip's table coach for a single-player, play-money Texas Hold'em game.
-The player pressed "Ask Pip" at the table. The message holds the game's own JSON snapshot of the hand, built from what the player can see. The player's own seat has the id "hero".
+The player pressed "Ask Pip" at the table. The message holds the game's own JSON description of the hand at that moment, built only from what the player can see. The player's own seat has the id "hero".
 
 Answer in this exact shape, plain text, no headings, lists or markdown:
 Line 1: the advice in at most eight words, starting with the action and size, e.g. "Call 6." or "Raise to 24." or "Fold."
 Then the explanation of why, for a learning player, at the length set below.
 
 Rules:
-- If stale is true or active is false, say the game isn't connected right now and give no advice.
 - If hand is null, say there is no hand in play.
 - If it is not the hero's turn (hand.currentPlayerToAct is not "hero"), say whose turn it is and what to watch for; give no action.
 - If hand.table.status is busted, won, scored or watching, the run is over: say so instead of advising.
@@ -28,7 +28,7 @@ Rules:
 - Use an opponent's style and reads only if present; with empty reads there is no read yet. Never guess opponent cards.
 - Chips only: bare numbers, never a currency sign.`
 
-// The player's own settings (Settings → Live coaching), sent with each question.
+// The player's own settings (Settings → Ask Pip), sent with each question.
 export const COACH_STYLES = {
   short: 'Length: the advice line, then exactly one short sentence. Stop there.',
   standard: 'Length: the advice line, then at most three short sentences. Stop there.',
@@ -59,15 +59,8 @@ export function coachSystem({ style, notes }) {
   return blocks
 }
 
-// What the model sees: freshness and the hand, nothing that identifies the session.
-export function coachInput(read) {
-  return JSON.stringify({
-    active: read?.active === true,
-    stale: read?.stale !== false,
-    pending: read?.pending === true,
-    hand: read?.state?.hand ?? null,
-  })
-}
+// What the model sees: the hand, exactly as the game described it.
+export const coachInput = (hand) => JSON.stringify({ hand })
 
 // Class name of a failure, mapped to what the player is told. Never the message.
 const FAILURES = [
@@ -92,7 +85,7 @@ const line = (value) => `${JSON.stringify(value)}\n`
  * any failure's class name, once the answer ends: hand it to `waitUntil`.
  * `signal` is the incoming request's, which aborts when the client disconnects.
  */
-export function streamCoach(env, read, prefs = coachPrefs(null), signal = null) {
+export function streamCoach(env, hand, prefs = coachPrefs(null), signal = null) {
   const client = new Anthropic({
     apiKey: env.ANTHROPIC_API_KEY,
     // Resolved per call, not captured, so a test can stand in for the API.
@@ -110,7 +103,7 @@ export function streamCoach(env, read, prefs = coachPrefs(null), signal = null) 
     max_tokens: MAX_TOKENS,
     output_config: { effort: 'low' },
     system: coachSystem(prefs),
-    messages: [{ role: 'user', content: coachInput(read) }],
+    messages: [{ role: 'user', content: coachInput(hand) }],
     // A safety decline is re-run on the model the API picks for its category.
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',

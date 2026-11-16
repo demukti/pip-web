@@ -3,8 +3,7 @@ export const noCache = {
   Pragma: 'no-cache',
   Expires: '0',
   'X-Content-Type-Options': 'nosniff',
-  // no-referrer makes ordinary form POSTs send Origin: null. Preserve the
-  // origin for consent CSRF checks while withholding paths and OAuth queries.
+  // Nothing links out from these responses; if anything does, the origin only.
   'Referrer-Policy': 'strict-origin',
 }
 
@@ -56,7 +55,3 @@ export function randomSecret() {
     b.toString(16).padStart(2, '0'),
   ).join('')
 }
-
-// Internal header from the Durable Object's read to the outer Worker:
-// { version, stale, pending, stateAgeMs }. Never forwarded to clients.
-export const READ_META = 'X-Pip-Read-Meta'

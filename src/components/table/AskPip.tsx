@@ -3,32 +3,32 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { X } from 'lucide-react'
-import { askPip } from '@/lib/liveCoaching/askPip'
-import { livePublisher } from '@/lib/liveCoaching/publisher'
+import { askPipConnection } from '@/lib/askPip/connection'
+import { askPip } from '@/lib/askPip/session'
 import { sound } from '@/lib/sound'
 import { cn } from '@/lib/utils'
 
 /*
  * Ask Pip: a coaching answer on the hand in front of you, only when you ask,
- * while this tab shares the table (Settings → Live coaching). Two pieces that
- * share one answer (`lib/liveCoaching/askPip.ts`): the button beside the
- * sharing badge, and the card over your own hand, the one part of the table
- * the advice already speaks for. It never covers a seat, the board or the pot.
+ * once this browser is signed in (Settings → Ask Pip). Two pieces that share
+ * one answer (`lib/askPip/session.ts`): the button in the table's top-left
+ * corner, and the card over your own hand, the one part of the table the
+ * advice already speaks for. It never covers a seat, the board or the pot.
  */
 
 const useAnswer = () => useSyncExternalStore(askPip.subscribe, askPip.get, askPip.getServer)
 
-/** The button, beside the sharing badge. `hand` is the deal being played. */
+/** The button, in the table's top-left corner. `hand` is the deal being played. */
 export function AskPipButton({ hand, className }: { hand: number; className?: string }) {
   const status = useSyncExternalStore(
-    livePublisher.subscribe,
-    livePublisher.getStatus,
-    livePublisher.getServerStatus,
+    askPipConnection.subscribe,
+    askPipConnection.get,
+    askPipConnection.getServer,
   )
   const answer = useAnswer()
   // A new deal retires the last one's answer (and stops one still being written).
   useEffect(() => () => askPip.leave(hand), [hand])
-  if (!status.connected) return null
+  if (!status.signedIn) return null
   const busy = answer.phase === 'asking' || answer.phase === 'answering'
   const showing = answer.phase !== 'idle' && answer.hand === hand
   return (
@@ -52,7 +52,9 @@ export function AskPipButton({ hand, className }: { hand: number; className?: st
 /**
  * The answer, laid over the hero's row (cards and panel) and anchored to its
  * foot: as tall as the row, or 12rem when the row is shorter, scrolling past
- * that. Place it inside a positioned box around the hero's row.
+ * that. Place it inside a positioned box around the hero's row that sets no
+ * z-index: at z-40 the answer, which the player asked for, lies over the
+ * hand's result banner (z-30) and under the end-of-run overlay (z-40, later).
  */
 export function AskPipCard({ hand }: { hand: number }) {
   const answer = useAnswer()
@@ -73,7 +75,7 @@ export function AskPipCard({ hand }: { hand: number }) {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 6 }}
           transition={{ duration: 0.15 }}
-          className="absolute inset-x-0 bottom-0 z-30 mx-auto max-h-[max(100%,12rem)] w-[min(26rem,calc(100%-1.5rem))] overflow-y-auto rounded-2xl border border-foreground/10 bg-background/95 p-3 pr-8 text-sm shadow-lg backdrop-blur-sm"
+          className="absolute inset-x-0 bottom-0 z-40 mx-auto max-h-[max(100%,12rem)] w-[min(26rem,calc(100%-1.5rem))] overflow-y-auto rounded-2xl border border-foreground/10 bg-background/95 p-3 pr-8 text-sm shadow-lg backdrop-blur-sm"
         >
           <button
             type="button"

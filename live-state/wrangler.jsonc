@@ -6,7 +6,6 @@
   "compatibility_flags": ["global_fetch_strictly_public", "enable_request_signal"],
   "workers_dev": true,
   "vars": {
-    "PUBLIC_URL": "https://pip-live-state.tizav.workers.dev",
     "ALLOWED_ORIGINS": "http://localhost:3000,https://pip-tutor-tizav.pages.dev"
   },
   "durable_objects": {
@@ -23,14 +22,9 @@
       "new_sqlite_classes": ["LiveState"]
     }
   ],
-  "kv_namespaces": [
-    {
-      "binding": "OAUTH_KV",
-      "id": "2887fef7714c41759b7ae2dd22c887d7"
-    }
-  ],
   "observability": {
     "enabled": false
   }
-  // OWNER_KEY: set using wrangler secret put; never place it in source or NEXT_PUBLIC_*.
+  // Secrets, set with `wrangler secret put`, never in source or NEXT_PUBLIC_*:
+  // OWNER_KEY (signs browsers in) and ANTHROPIC_API_KEY (pays for answers).
 }

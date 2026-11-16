@@ -26,16 +26,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The full gate (`pnpm test:all`, ~11 minutes on a runner) is still run
       # locally before every push. These are the seconds-long checks that guard
-      # this deploy: types, and the add-on's own tests.
+      # this deploy: types, and Ask Pip's own tests.
       - name: Type check
         run: pnpm test:types
-      - name: Live coaching tests
-        run: pnpm ava tests/live*.test.ts
+      - name: Ask Pip tests
+        run: pnpm ava 'tests/askPip*.test.ts'
       - name: Build static game
         env:
-          NEXT_PUBLIC_LIVE_STATE_URL: https://pip-live-state.tizav.workers.dev
+          NEXT_PUBLIC_ASK_PIP_URL: https://pip-live-state.tizav.workers.dev
         run: pnpm build
-      - name: Deploy private state service
+      - name: Deploy Ask Pip service
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
