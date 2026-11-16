@@ -34,7 +34,17 @@ jobs:
       - name: Build static game
         env:
           NEXT_PUBLIC_ASK_COACH_URL: https://pip-live-state.tizav.workers.dev
+          # Cross-device sync (docs/sync.md), from the fork's own Supabase
+          # project. Repo Variables, not Secrets: both ship in the bundle. Left
+          # unset, they build as empty and sync does not exist.
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: pnpm build
+      # Once sync is wired, a build that lost it must not ship (the same check
+      # as deploy-cloudflare-pages.yaml). Skipped while the variables are unset.
+      - name: Assert the build has sync configured
+        if: vars.NEXT_PUBLIC_SUPABASE_URL != ''
+        run: pnpm test:sync-config
       - name: Deploy the coach service
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
