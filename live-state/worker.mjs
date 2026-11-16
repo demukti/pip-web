@@ -2,7 +2,7 @@ import { COACH_MODEL, coachPrefs, streamCoach } from './coach.mjs'
 import { bearer, bodyText, hash, json, noCache, secretMatches } from './http.mjs'
 export { LiveState } from './devices.mjs'
 
-// Ask Pip's service. The game signs a browser in once with the owner key, then
+// The coach's service. The game signs a browser in once with the owner key, then
 // sends the hand with each question; this Worker keeps the Claude API key and
 // streams the answer back. Four routes:
 //
@@ -41,7 +41,7 @@ async function devices(env, path, request) {
 
 async function coach(request, env, ctx, trace) {
   if (!env.ANTHROPIC_API_KEY)
-    return json({ error: 'Ask Pip is not set up on the service', code: 'coach_off' }, 503)
+    return json({ error: 'The coach is not set up on the service', code: 'coach_off' }, 503)
   let question
   try {
     question = JSON.parse(await bodyText(request, QUESTION_MAX))
@@ -59,7 +59,7 @@ async function coach(request, env, ctx, trace) {
     finished.then((outcome) =>
       console.info(
         JSON.stringify({
-          event: 'ask_pip_answer',
+          event: 'ask_coach_answer',
           requestId: trace.requestId,
           model: COACH_MODEL,
           firstTextMs: outcome.firstTextMs,
@@ -149,7 +149,7 @@ export default {
         // query string, body, IP address or error message.
         console.info(
           JSON.stringify({
-            event: 'ask_pip_request',
+            event: 'ask_coach_request',
             requestId: trace.requestId,
             method: request.method,
             path,

@@ -1,4 +1,4 @@
-// Ask Pip end to end: the real Worker and Durable Object in Node with in-memory
+// The coach end to end: the real Worker and Durable Object in Node with in-memory
 // bindings, the real Anthropic SDK against a stand-in for the API, and the
 // game's own client code (sign-in, one answer at a time, reading the stream).
 import test, { type ExecutionContext } from 'ava'
@@ -9,10 +9,10 @@ import {
 import { COACH_PER_MINUTE, MAX_DEVICES } from '../live-state/devices.mjs'
 import { hash } from '../live-state/http.mjs'
 import worker, { LiveState } from '../live-state/worker.mjs'
-import { COACH_STYLES, CoachPrefsStore, NOTES_MAX, readCoach } from '@/lib/askPip/coach'
-import { AskPipConnection } from '@/lib/askPip/connection'
-import type { CoachHand } from '@/lib/askPip/hand'
-import { AskPipSession, type Question } from '@/lib/askPip/session'
+import { COACH_STYLES, CoachPrefsStore, NOTES_MAX, readCoach } from '@/lib/askCoach/coach'
+import { AskCoachConnection } from '@/lib/askCoach/connection'
+import type { CoachHand } from '@/lib/askCoach/hand'
+import { AskCoachSession, type Question } from '@/lib/askCoach/session'
 
 // The Worker writes log lines with console.info; keep them for the log tests.
 const logged: string[] = []
@@ -24,7 +24,7 @@ const logs = (event: string) =>
 
 const API_KEY = 'test-anthropic-key'
 const OWNER_KEY = 'test-owner-key-with-at-least-32-random-characters'
-const base = 'https://ask-pip.example'
+const base = 'https://ask-coach.example'
 const DAY = 24 * 60 * 60 * 1000
 
 const ALLOWED_REQUEST_LOG = [
@@ -141,8 +141,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10))
 
 /** The next end-of-answer log line, once it has been written. */
 async function nextAnswerLog(before: number) {
-  for (let i = 0; i < 100 && logs('ask_pip_answer').length === before; i++) await settle()
-  return logs('ask_pip_answer').at(-1)
+  for (let i = 0; i < 100 && logs('ask_coach_answer').length === before; i++) await settle()
+  return logs('ask_coach_answer').at(-1)
 }
 
 // ---------------------------------------------------------------------------
@@ -435,13 +435,13 @@ test.serial('the answer streams on the hand the game sent, exactly as sent', asy
   t.deepEqual(JSON.parse(call.body.messages[0].content), { hand: HAND })
   t.false(call.body.messages[0].content.includes(bearer))
 
-  const answer = await nextAnswerLog(logs('ask_pip_answer').length - 1)
+  const answer = await nextAnswerLog(logs('ask_coach_answer').length - 1)
   t.is(answer?.model, 'claude-sonnet-5-5')
   t.is(answer?.stop, 'end_turn')
   t.is(answer?.outputTokens, 42)
   t.true(Number.isFinite(answer?.firstTextMs) && Number.isFinite(answer?.totalMs))
   t.true(Object.keys(answer).every((name) => ALLOWED_ANSWER_LOG.includes(name)))
-  const request = logs('ask_pip_request').find((entry) => entry.requestId === answer?.requestId)
+  const request = logs('ask_coach_request').find((entry) => entry.requestId === answer?.requestId)
   t.is(request?.path, '/coach')
   t.is(request?.status, 200)
   t.true(request?.hasBearer)
@@ -476,7 +476,7 @@ test.serial('questions keep to the rate across every browser', async (t) => {
   await again.text()
 })
 
-test.serial('without an API key the service says Ask Pip is off and calls nothing', async (t) => {
+test.serial('without an API key the service says the coach is off and calls nothing', async (t) => {
   const calls = standIn(t, () => streamed(answerEvents(['Fold.'])))
   const { fetcher } = fixture({ ANTHROPIC_API_KEY: undefined })
   const response = await ask(fetcher, await token(fetcher))
@@ -550,7 +550,7 @@ test.serial(
     const { fetcher } = fixture()
     const bearer = await token(fetcher)
 
-    const before = logs('ask_pip_answer').length
+    const before = logs('ask_coach_answer').length
     const refusedKey = await lines(await ask(fetcher, bearer))
     t.deepEqual(refusedKey.at(-1), {
       type: 'error',
@@ -572,7 +572,7 @@ test.serial('closing the answer mid-stream stops the model call', async (t) => {
   const { stopped } = pausedAnswer(t)
   const { fetcher } = fixture()
   const bearer = await token(fetcher)
-  const before = logs('ask_pip_answer').length
+  const before = logs('ask_coach_answer').length
   const { reader, text } = await firstWords(await ask(fetcher, bearer))
   t.regex(text, /Raise to 24/)
   await reader?.cancel()
@@ -591,7 +591,7 @@ test.serial(
     const { stopped } = pausedAnswer(t)
     const { fetcher } = fixture()
     const bearer = await token(fetcher)
-    const before = logs('ask_pip_answer').length
+    const before = logs('ask_coach_answer').length
     const disconnect = new AbortController()
     const response = await ask(fetcher, bearer, QUESTION, { signal: disconnect.signal })
     t.is(response.status, 200)
@@ -644,7 +644,7 @@ test.serial('only the game’s own origins may call the service', async (t) => {
 })
 
 // ---------------------------------------------------------------------------
-// The game's sign-in (Settings → Ask Pip)
+// The game's sign-in (Settings → Coach)
 
 function memory() {
   const values = new Map<string, string>()
@@ -666,7 +666,7 @@ test.serial('the game signs in once and keeps the service and token, never the k
   standIn(t, () => streamed(answerEvents(['Fold.'])))
   const { fetcher } = fixture()
   const { values, storage } = memory()
-  const connection = new AskPipConnection(storage, fetcher as typeof fetch)
+  const connection = new AskCoachConnection(storage, fetcher as typeof fetch)
   t.deepEqual(connection.get(), { signedIn: false, url: null, message: '' })
   let heard = 0
   connection.subscribe(() => heard++)
@@ -679,12 +679,12 @@ test.serial('the game signs in once and keeps the service and token, never the k
   await connection.connect(`${base}/settings?x=1`, OWNER_KEY)
   t.deepEqual(connection.get(), { signedIn: true, url: base, message: '' })
   t.true(heard > 0)
-  const saved = JSON.parse(values.get('pip.ask-pip.v1') ?? '{}')
+  const saved = JSON.parse(values.get('pip.ask-coach.v1') ?? '{}')
   t.deepEqual(Object.keys(saved), ['url', 'token'])
   t.is(saved.url, base)
   t.false([...values.values()].join().includes(OWNER_KEY))
   // A new visit reads the saved sign-in.
-  t.true(new AskPipConnection(storage, fetcher as typeof fetch).get().signedIn)
+  t.true(new AskCoachConnection(storage, fetcher as typeof fetch).get().signedIn)
 
   const response = await connection.ask(QUESTION, new AbortController().signal)
   t.deepEqual(await readCoach(response, () => {}), { ok: true })
@@ -695,21 +695,21 @@ test.serial('the game signs in once and keeps the service and token, never the k
   t.is(values.size, 0)
   t.is((await ask(fetcher, saved.token)).status, 401)
   await t.throwsAsync(connection.ask(QUESTION, new AbortController().signal), {
-    message: 'Not signed in to Ask Pip',
+    message: 'Not signed in to the coach',
   })
 })
 
 test('the service URL must be HTTPS, or HTTP on this machine', async (t) => {
   const requested: string[] = []
-  const connection = new AskPipConnection(memory().storage, (async (url: string) => {
+  const connection = new AskCoachConnection(memory().storage, (async (url: string) => {
     requested.push(url)
     return Response.json({ token: 'issued' })
   }) as typeof fetch)
   for (const [url, message] of [
     ['not a url', 'Enter the service URL'],
-    ['http://ask-pip.example', 'Use an HTTPS service URL'],
-    ['ftp://ask-pip.example', 'Use an HTTPS service URL'],
-    ['https://user:pw@ask-pip.example', 'Invalid service URL'],
+    ['http://ask-coach.example', 'Use an HTTPS service URL'],
+    ['ftp://ask-coach.example', 'Use an HTTPS service URL'],
+    ['https://user:pw@ask-coach.example', 'Invalid service URL'],
   ])
     await t.throwsAsync(connection.connect(url, OWNER_KEY), { message })
   t.deepEqual(requested, [])
@@ -719,9 +719,9 @@ test('the service URL must be HTTPS, or HTTP on this machine', async (t) => {
 
 test('a refused token signs the browser out and says so; offline sign-out still works', async (t) => {
   const { values, storage } = memory()
-  values.set('pip.ask-pip.v1', JSON.stringify({ url: base, token: 'stale' }))
+  values.set('pip.ask-coach.v1', JSON.stringify({ url: base, token: 'stale' }))
   let online = true
-  const connection = new AskPipConnection(storage, (async () => {
+  const connection = new AskCoachConnection(storage, (async () => {
     if (!online) throw new TypeError('Failed to fetch')
     return Response.json({ code: 'signed_out' }, { status: 401 })
   }) as typeof fetch)
@@ -730,35 +730,35 @@ test('a refused token signs the browser out and says so; offline sign-out still 
   t.deepEqual(connection.get(), {
     signedIn: false,
     url: null,
-    message: 'You were signed out. Sign in again to ask Pip.',
+    message: 'You were signed out. Sign in again to ask the coach.',
   })
   t.is(values.size, 0)
 
-  values.set('pip.ask-pip.v1', JSON.stringify({ url: base, token: 'kept' }))
+  values.set('pip.ask-coach.v1', JSON.stringify({ url: base, token: 'kept' }))
   online = false
-  const offline = new AskPipConnection(storage, (async () => {
+  const offline = new AskCoachConnection(storage, (async () => {
     throw new TypeError('Failed to fetch')
   }) as typeof fetch)
   await t.notThrowsAsync(offline.disconnect())
   t.false(offline.get().signedIn)
   t.is(values.size, 0)
   // Unreadable storage is simply signed out.
-  values.set('pip.ask-pip.v1', '{not json')
-  t.false(new AskPipConnection(storage).get().signedIn)
+  values.set('pip.ask-coach.v1', '{not json')
+  t.false(new AskCoachConnection(storage).get().signedIn)
 })
 
 test.serial('the button asks about the hand on the table and shows the answer', async (t) => {
   const calls = standIn(t, () => streamed(answerEvents(['Call 6.\n', 'Cheap price.'])))
   const { fetcher } = fixture()
-  const connection = new AskPipConnection(memory().storage, fetcher as typeof fetch)
+  const connection = new AskCoachConnection(memory().storage, fetcher as typeof fetch)
   await connection.connect(base, OWNER_KEY)
-  const session = new AskPipSession(
+  const session = new AskCoachSession(
     (question, signal) => connection.ask(question, signal),
     () => ({ style: 'short', notes: '' }),
     () => HAND as unknown as CoachHand,
   )
   await session.start(7)
-  t.deepEqual(session.get(), { phase: 'done', hand: 7, text: 'Call 6.\nCheap price.' })
+  t.deepEqual(session.get(), { phase: 'done', hand: 7, text: 'Call 6.\nCheap price.', shown: true })
   t.deepEqual(JSON.parse(calls[0].body.messages[0].content), { hand: HAND })
   t.is(calls[0].body.system[1].text, SERVICE_STYLES.short)
 })
@@ -853,14 +853,14 @@ test('coaching settings default, persist, and tell listeners', (t) => {
   prefs.set({ notes: 'Be blunt.' })
   t.is(heard, 2)
   t.deepEqual(new CoachPrefsStore(storage).get(), { style: 'teach', notes: 'Be blunt.' })
-  t.deepEqual([...values.keys()], ['pip.ask-pip-settings.v1'])
+  t.deepEqual([...values.keys()], ['pip.ask-coach-settings.v1'])
 })
 
 test('stored settings that are unreadable or out of range fall back safely', (t) => {
   const { values, storage } = memory()
-  values.set('pip.ask-pip-settings.v1', '{not json')
+  values.set('pip.ask-coach-settings.v1', '{not json')
   t.deepEqual(new CoachPrefsStore(storage).get(), { style: 'standard', notes: '' })
-  values.set('pip.ask-pip-settings.v1', JSON.stringify({ style: 'loud', notes: 'y'.repeat(900) }))
+  values.set('pip.ask-coach-settings.v1', JSON.stringify({ style: 'loud', notes: 'y'.repeat(900) }))
   const prefs = new CoachPrefsStore(storage).get()
   t.is(prefs.style, 'standard')
   t.is(prefs.notes.length, NOTES_MAX)
@@ -884,9 +884,31 @@ const answerBody = (...events: object[]) =>
 const prefs = () => ({ style: 'standard' as const, notes: '' })
 const noHand = () => null
 
+/** A session whose answers are `Fold.` and count the questions put. */
+function counting() {
+  let asked = 0
+  const session = new AskCoachSession(
+    async () => {
+      asked++
+      return answerBody({ type: 'text', text: 'Fold.' }, { type: 'done' })
+    },
+    prefs,
+    noHand,
+  )
+  return { session, asked: () => asked }
+}
+
+/** An answer that never comes; it ends only when aborted, as a real fetch does. */
+const neverAnswers = (signals: AbortSignal[]) => (_question: Question, signal: AbortSignal) => {
+  signals.push(signal)
+  return new Promise<Response>((_resolve, reject) =>
+    signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))),
+  )
+}
+
 test('an answer streams in, then stays for its hand', async (t) => {
   const seen: string[] = []
-  const session = new AskPipSession(
+  const session = new AskCoachSession(
     async () =>
       answerBody(
         { type: 'text', text: 'Call 2.\n' },
@@ -898,44 +920,116 @@ test('an answer streams in, then stays for its hand', async (t) => {
   )
   session.subscribe(() => seen.push(session.get().phase))
   await session.start(4)
-  t.deepEqual(session.get(), { phase: 'done', hand: 4, text: 'Call 2.\nCheap.' })
+  t.deepEqual(session.get(), { phase: 'done', hand: 4, text: 'Call 2.\nCheap.', shown: true })
   t.deepEqual(seen, ['asking', 'answering', 'answering', 'done'])
 })
 
-test('the next deal retires the answer; an older deal leaving does not', async (t) => {
-  const session = new AskPipSession(async () => answerBody({ type: 'done' }), prefs, noHand)
-  await session.start(4)
-  session.leave(3)
-  t.is(session.get().phase, 'done')
-  session.leave(4)
-  t.is(session.get().phase, 'idle')
+test('closing the card keeps the answer; the button brings it back without asking', async (t) => {
+  const { session, asked } = counting()
+  session.press(4)
+  await settle()
+  t.is(asked(), 1)
+  session.hide()
+  t.deepEqual(session.get(), { phase: 'done', hand: 4, text: 'Fold.', shown: false })
+  session.press(4)
+  t.deepEqual(session.get(), { phase: 'done', hand: 4, text: 'Fold.', shown: true })
+  t.is(asked(), 1)
+  // With the card open, pressing asks again.
+  session.press(4)
+  await settle()
+  t.is(asked(), 2)
+  // A kept answer belongs to its deal: on the next one the button asks.
+  session.hide()
+  session.press(5)
+  await settle()
+  t.is(asked(), 3)
+  t.like(session.get(), { phase: 'done', hand: 5, shown: true })
 })
 
-test('closing, or asking again, stops the answer being written', async (t) => {
-  const signals: AbortSignal[] = []
-  const session = new AskPipSession(
-    (_question, signal) => {
-      signals.push(signal)
-      // Never answers; ends only when aborted, as a real fetch does.
-      return new Promise((_resolve, reject) =>
-        signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))),
-      )
-    },
+test('a closed answer still being written goes on arriving, and comes back whole', async (t) => {
+  let finish: () => void = () => {}
+  const session = new AskCoachSession(
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            const encoder = new TextEncoder()
+            controller.enqueue(encoder.encode('{"type":"text","text":"Raise to 24.\\n"}\n'))
+            finish = () => {
+              controller.enqueue(encoder.encode('{"type":"text","text":"Fold equity."}\n'))
+              controller.enqueue(encoder.encode('{"type":"done"}\n'))
+              controller.close()
+            }
+          },
+        }),
+      ),
     prefs,
     noHand,
   )
+  const asking = session.start(2)
+  await settle()
+  session.hide()
+  finish()
+  await asking
+  t.deepEqual(session.get(), {
+    phase: 'done',
+    hand: 2,
+    text: 'Raise to 24.\nFold equity.',
+    shown: false,
+  })
+})
+
+test('a failed answer is never brought back: pressing asks again', async (t) => {
+  let fail = true
+  const session = new AskCoachSession(
+    async () =>
+      fail
+        ? answerBody({ type: 'error', message: 'The coach is busy.' })
+        : answerBody({ type: 'text', text: 'Check.' }, { type: 'done' }),
+    prefs,
+    noHand,
+  )
+  await session.start(3)
+  session.hide()
+  fail = false
+  session.press(3)
+  await settle()
+  t.deepEqual(session.get(), { phase: 'done', hand: 3, text: 'Check.', shown: true })
+})
+
+test('the next deal or the player acting drops the answer and stops it being written', async (t) => {
+  const signals: AbortSignal[] = []
+  const session = new AskCoachSession(neverAnswers(signals), prefs, noHand)
+  void session.start(4)
+  session.hide()
+  session.leave(3)
+  t.false(signals[0].aborted)
+  t.not(session.get().phase, 'idle')
+  session.leave(4)
+  t.true(signals[0].aborted)
+  t.is(session.get().phase, 'idle')
+
+  void session.start(5)
+  session.retire()
+  t.true(signals[1].aborted)
+  t.is(session.get().phase, 'idle')
+})
+
+test('asking again replaces the answer still being written', async (t) => {
+  const signals: AbortSignal[] = []
+  const session = new AskCoachSession(neverAnswers(signals), prefs, noHand)
   const first = session.start(1)
   const second = session.start(1)
   t.true(signals[0].aborted)
   t.false(signals[1].aborted)
-  session.close()
+  session.retire()
   await Promise.all([first, second])
   t.true(signals[1].aborted)
   t.is(session.get().phase, 'idle')
 })
 
 test('a failed or unreachable ask keeps what was written and says why', async (t) => {
-  const failing = new AskPipSession(
+  const failing = new AskCoachSession(
     async () =>
       answerBody({ type: 'text', text: 'Fo' }, { type: 'error', message: 'The coach is busy.' }),
     prefs,
@@ -947,8 +1041,9 @@ test('a failed or unreachable ask keeps what was written and says why', async (t
     hand: 2,
     text: 'Fo',
     message: 'The coach is busy.',
+    shown: true,
   })
-  const offline = new AskPipSession(
+  const offline = new AskCoachSession(
     async () => {
       throw new TypeError('Failed to fetch')
     },
@@ -960,7 +1055,8 @@ test('a failed or unreachable ask keeps what was written and says why', async (t
     phase: 'failed',
     hand: 2,
     text: '',
-    message: 'Couldn’t reach Pip. Ask again.',
+    message: 'Couldn’t reach the coach. Ask again.',
+    shown: true,
   })
 })
 
@@ -968,7 +1064,7 @@ test('each ask sends the hand and the settings as they are at that moment', asyn
   let style: 'short' | 'teach' = 'short'
   let street = 'flop'
   const sent: Question[] = []
-  const session = new AskPipSession(
+  const session = new AskCoachSession(
     async (question) => {
       sent.push(question)
       return answerBody({ type: 'done' })

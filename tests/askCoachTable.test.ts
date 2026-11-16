@@ -1,8 +1,8 @@
 import test from 'ava'
 
-// Ask Pip's view of the table against the real stores, in Node: what
+// The coach's view of the table against the real stores, in Node: what
 // `tableContext()` reads from `useGame`/`useProfile`, and what `currentHand()`
-// describes at the moment the player asks, with `startAskPip()` remembering what
+// describes at the moment the player asks, with `startAskCoach()` remembering what
 // the store forgets. The game is played for real (AI timers run at once).
 //
 // What this cannot cover: a browser. The button, the card and the timing of real
@@ -24,15 +24,15 @@ const { useProfile } = await import('@/store/profile')
 const { venueById } = await import('@/config/venues')
 const { legalActions, isHandComplete } = await import('@/lib/poker/engine')
 const { deriveReads, emptySeatStats } = await import('@/lib/reads')
-const { currentHand, startAskPip, tableContext } = await import('@/lib/askPip/table')
+const { currentHand, startAskCoach, tableContext } = await import('@/lib/askCoach/table')
 
 const HERO = { name: 'Hero', avatar: { seed: 'hero', backgroundColor: 'b6e3f4' }, member: true }
 /** A five-seat tournament with cast characters. */
 const PUB = venueById('pub')!
 
-/** Ask Pip's memory of the store, as AppBoot starts it. */
+/** The coach's memory of the store, as AppBoot starts it. */
 function tracking(t: import('ava').ExecutionContext) {
-  const stop = startAskPip()
+  const stop = startAskCoach()
   t.teardown(() => {
     stop()
     useGame.getState().leave()
@@ -219,3 +219,29 @@ function ordinal(n: number) {
   const v = n % 100
   return n + (s[(v - 20) % 10] || s[v] || s[0])
 }
+
+test.serial(
+  'the card’s action count moves on the player’s own committed actions only',
+  async (t) => {
+    tracking(t)
+    const { heroActions } = await import('@/lib/askCoach/table')
+    t.is(heroActions({ hand: null }), 0)
+    await fast(async () => {
+      useGame.getState().sitDown(PUB, HERO)
+      // Wait for the player's first turn: opponents may act first, and do not count.
+      for (let i = 0; i < 2000; i++) {
+        const game = useGame.getState()
+        if (game.hand?.players[game.hand.toActIndex]?.id === 'hero') break
+        if (game.status === 'handover') game.nextHand()
+        await turn()
+      }
+    })
+    const game = useGame.getState()
+    t.is(game.hand?.players[game.hand.toActIndex]?.id, 'hero')
+    // Opponents' actions so far do not count.
+    t.is(heroActions(game), 0)
+    const legal = legalActions(game.hand!)!
+    game.act({ type: legal.canCheck ? 'check' : 'fold' })
+    t.is(heroActions(useGame.getState()), 1)
+  },
+)

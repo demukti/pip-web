@@ -1,5 +1,5 @@
 // The hand and the table around it, read from the stores the moment the player
-// asks. Kept outside the game store, which Ask Pip never touches: one
+// asks. Kept outside the game store, which the coach never touches: one
 // subscription (started in AppBoot) remembers what the store forgets.
 //
 // The rule is the description's own: only what the player can already see. The
@@ -62,7 +62,7 @@ const sameDeal = (earlier: DealMark, now: DealMark) =>
 const isOut = ({ venue, seats }: Game) =>
   !!venue && !venue.cash && seats.find((seat) => seat.isHuman)?.stack === 0
 
-/** Ask Pip covers Hold'em: other variants are described as no hand. */
+/** The coach covers Hold'em: other variants are described as no hand. */
 const holdem = (game: Game) => (game.hand?.variant === 'holdem' ? game.hand : null)
 
 function track(game: Game) {
@@ -104,6 +104,13 @@ export function tableContext(game: Game = useGame.getState()): TableContext | nu
   }
 }
 
+/**
+ * How many actions the player has committed in the hand on the table. Sizing a
+ * raise is not one until it is confirmed. The card closes when this moves.
+ */
+export const heroActions = ({ hand }: Pick<Game, 'hand'>) =>
+  hand?.actions?.filter((action) => action.playerId === HERO_ID).length ?? 0
+
 /** The hand in front of the player, as the coach is told it; null without one. */
 export function currentHand(game: Game = useGame.getState()) {
   track(game)
@@ -124,7 +131,7 @@ export function currentHand(game: Game = useGame.getState()) {
  * Remember, on every change, what the store forgets: the first finishing place
  * and the last hero-turn estimate of the deal. Returns the unsubscribe.
  */
-export function startAskPip() {
+export function startAskCoach() {
   track(useGame.getState())
   return useGame.subscribe((state) => track(state))
 }

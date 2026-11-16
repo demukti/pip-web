@@ -1,17 +1,17 @@
 /**
- * Ask Pip's sign-in: this browser signs in once with the owner key and keeps
- * only the token the service gives back (localStorage `pip.ask-pip.v1`), never
+ * The coach's sign-in: this browser signs in once with the owner key and keeps
+ * only the token the service gives back (localStorage `pip.ask-coach.v1`), never
  * the key. The token stays valid 30 days past its last question; rotating the
  * owner key on the service signs every browser out. No React, no store.
  */
 
-const KEY = 'pip.ask-pip.v1'
+const KEY = 'pip.ask-coach.v1'
 
 interface Saved {
   url: string
   token: string
 }
-export interface AskPipStatus {
+export interface AskCoachStatus {
   signedIn: boolean
   /** The service this browser is signed in to, for Settings. */
   url: string | null
@@ -20,7 +20,7 @@ export interface AskPipStatus {
 }
 type Storage = Pick<globalThis.Storage, 'getItem' | 'setItem' | 'removeItem'>
 
-const SIGNED_OUT: AskPipStatus = { signedIn: false, url: null, message: '' }
+const SIGNED_OUT: AskCoachStatus = { signedIn: false, url: null, message: '' }
 
 /** An HTTPS service, or plain HTTP on this machine for development; its origin only. */
 function serviceOrigin(url: string) {
@@ -37,8 +37,8 @@ function serviceOrigin(url: string) {
   return endpoint.origin
 }
 
-export class AskPipConnection {
-  private status: AskPipStatus | null = null
+export class AskCoachConnection {
+  private status: AskCoachStatus | null = null
   private listeners = new Set<() => void>()
 
   constructor(
@@ -55,7 +55,7 @@ export class AskPipConnection {
       return null
     }
   }
-  private update(status: AskPipStatus) {
+  private update(status: AskCoachStatus) {
     this.status = status
     for (const listener of this.listeners) listener()
   }
@@ -68,7 +68,7 @@ export class AskPipConnection {
     this.update({ ...SIGNED_OUT, message })
   }
 
-  get = (): AskPipStatus => {
+  get = (): AskCoachStatus => {
     if (!this.status) {
       const saved = this.load()
       this.status = saved ? { signedIn: true, url: saved.url, message: '' } : SIGNED_OUT
@@ -130,7 +130,7 @@ export class AskPipConnection {
    */
   async ask(question: unknown, signal: AbortSignal) {
     const saved = this.load()
-    if (!saved) throw new Error('Not signed in to Ask Pip')
+    if (!saved) throw new Error('Not signed in to the coach')
     const response = await this.request(`${saved.url}/coach`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${saved.token}` },
@@ -138,9 +138,9 @@ export class AskPipConnection {
       cache: 'no-store',
       signal,
     })
-    if (response.status === 401) this.forget('You were signed out. Sign in again to ask Pip.')
+    if (response.status === 401) this.forget('You were signed out. Sign in again to ask the coach.')
     return response
   }
 }
 
-export const askPipConnection = new AskPipConnection()
+export const askCoachConnection = new AskCoachConnection()

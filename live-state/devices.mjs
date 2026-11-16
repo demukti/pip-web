@@ -1,6 +1,6 @@
 import { bearer, hash, json, randomSecret } from './http.mjs'
 
-// The browsers signed in to Ask Pip, and how often they ask. One object for the
+// The browsers signed in to the coach, and how often they ask. One object for the
 // owner; only the outer Worker can reach it.
 
 // A browser stays signed in while it is used: 30 days after its last question.
@@ -33,7 +33,7 @@ export class LiveState {
       if (path === '/connect') return this.connect(request, now)
       const id = await this.find(request, now)
       if (!id)
-        return json({ error: 'Signed out of Ask Pip; sign in again', code: 'signed_out' }, 401)
+        return json({ error: 'Signed out of the coach; sign in again', code: 'signed_out' }, 401)
       if (path === '/disconnect') {
         delete this.devices[id]
         await this.save()

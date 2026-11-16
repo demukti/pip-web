@@ -1,30 +1,30 @@
 'use client'
 
 import { useState, useSyncExternalStore } from 'react'
-import { COACH_STYLES, coachPrefs, NOTES_MAX } from '@/lib/askPip/coach'
-import { askPipConnection } from '@/lib/askPip/connection'
+import { COACH_STYLES, coachPrefs, NOTES_MAX } from '@/lib/askCoach/coach'
+import { askCoachConnection } from '@/lib/askCoach/connection'
 import { Button } from '@/components/ui/button'
 import { Segmented } from '@/components/ui/segmented'
 
 /**
- * Ask Pip: sign this browser in once, then shape how Pip answers. Signed out,
- * the table shows no Ask Pip button at all.
+ * The coach: sign this browser in once, then shape how it answers. Signed out,
+ * the table shows no coach button at all.
  */
-export function AskPipSection() {
+export function AskCoachSection() {
   const status = useSyncExternalStore(
-    askPipConnection.subscribe,
-    askPipConnection.get,
-    askPipConnection.getServer,
+    askCoachConnection.subscribe,
+    askCoachConnection.get,
+    askCoachConnection.getServer,
   )
   return (
     <section className="rounded-2xl border border-foreground/10 bg-foreground/[0.03] p-4">
-      <h2 className="font-semibold">Ask Pip</h2>
+      <h2 className="font-semibold">Coach</h2>
       <p className="mt-2 text-sm text-muted-foreground">
-        Advice on the hand in front of you, only when you ask: press Ask Pip at the table.
-        Play-money Hold’em against the cast.
+        Advice on the hand in front of you, only when you ask: press the lightbulb in the corner of
+        your panel at the table (A on a keyboard). Play-money Hold’em against the cast.
       </p>
       {status.signedIn ? <SignedIn url={status.url} /> : <SignIn message={status.message} />}
-      <AskPipSettings />
+      <AskCoachSettings />
     </section>
   )
 }
@@ -35,7 +35,7 @@ function SignedIn({ url }: { url: string | null }) {
       <p role="status" className="text-sm">
         This browser is signed in{url ? ` to ${new URL(url).host}` : ''}.
       </p>
-      <Button variant="outline" onClick={() => void askPipConnection.disconnect()}>
+      <Button variant="outline" onClick={() => void askCoachConnection.disconnect()}>
         Sign out
       </Button>
     </div>
@@ -43,7 +43,7 @@ function SignedIn({ url }: { url: string | null }) {
 }
 
 function SignIn({ message }: { message: string }) {
-  const [url, setUrl] = useState(process.env.NEXT_PUBLIC_ASK_PIP_URL ?? '')
+  const [url, setUrl] = useState(process.env.NEXT_PUBLIC_ASK_COACH_URL ?? '')
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -55,7 +55,7 @@ function SignIn({ message }: { message: string }) {
         setBusy(true)
         setError('')
         try {
-          await askPipConnection.connect(url, key)
+          await askCoachConnection.connect(url, key)
         } catch (error) {
           setError(error instanceof Error ? error.message : 'Couldn’t sign in. Try again.')
         } finally {
@@ -109,15 +109,15 @@ function SignIn({ message }: { message: string }) {
 }
 
 /**
- * How Pip answers: a length, and the player's own words. Saved in this
+ * How the coach answers: a length, and the player's own words. Saved in this
  * browser; sent with each question, so a change applies to the next one.
  */
-function AskPipSettings() {
+function AskCoachSettings() {
   const prefs = useSyncExternalStore(coachPrefs.subscribe, coachPrefs.get, coachPrefs.getServer)
   const picked = COACH_STYLES.findIndex((style) => style.value === prefs.style)
   return (
     <div className="mt-5 flex flex-col gap-3 border-t border-foreground/10 pt-4">
-      <h3 className="text-sm font-semibold">How Pip answers</h3>
+      <h3 className="text-sm font-semibold">How the coach answers</h3>
       <Segmented
         options={COACH_STYLES.map((style, index) => ({
           value: index,
@@ -128,7 +128,7 @@ function AskPipSettings() {
         onPick={(index) => coachPrefs.set({ style: COACH_STYLES[index].value })}
       />
       <label className="text-sm">
-        How should Pip coach you?
+        How do you want to be coached?
         <textarea
           className="mt-1 block min-h-20 w-full rounded-lg border border-foreground/20 bg-background p-2 text-sm"
           value={prefs.notes}

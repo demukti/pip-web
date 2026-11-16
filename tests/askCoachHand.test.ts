@@ -1,5 +1,5 @@
 import test from 'ava'
-import { describeHand, type TableContext } from '@/lib/askPip/hand'
+import { describeHand, type TableContext } from '@/lib/askCoach/hand'
 import { mulberry32, cardToString } from '@/lib/poker/cards'
 import { evaluateHand, handPhrase } from '@/lib/poker/handEval'
 import {

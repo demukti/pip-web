@@ -4,7 +4,7 @@ import { motion } from 'framer-motion'
 import { useRouter } from 'next/navigation'
 import { PageShell } from '@/components/PageShell'
 import { MembershipSection } from '@/components/settings/MembershipSection'
-import { AskPipSection } from '@/components/settings/AskPipSection'
+import { AskCoachSection } from '@/components/settings/AskCoachSection'
 import { NotificationsGroup } from '@/components/settings/SlowGamesSection'
 import { AccountGroup } from '@/components/settings/SyncSection'
 import { DeleteAccount } from '@/components/settings/AccountRows'
@@ -51,7 +51,7 @@ export function SettingsScreen() {
           <SoundGroup />
           <NotificationsGroup />
           <TableGroup />
-          <AskPipSection />
+          <AskCoachSection />
         </div>
 
         <div className="mx-auto mt-4 flex max-w-sm flex-col gap-6">

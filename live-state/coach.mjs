@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 
-// On-demand table coaching: the player presses Ask Pip, the game sends the hand
+// On-demand table coaching: the player asks the coach, the game sends the hand
 // as it stands, and the Worker streams one Claude answer back. One model pass, no
 // tools.
 // Measured 2026-11-16 on four spots: first words in 0.6–1.0 s, done in 1.6–2.7 s
@@ -12,7 +12,7 @@ const MAX_TOKENS = 1024
 // Fixed text, no per-request values, so every request sends the same prefix. It is
 // below the model's minimum cacheable length, so it is not marked for caching.
 export const COACH_SYSTEM = `You are Pip's table coach for a single-player, play-money Texas Hold'em game.
-The player pressed "Ask Pip" at the table. The message holds the game's own JSON description of the hand at that moment, built only from what the player can see. The player's own seat has the id "hero".
+The player asked the coach at the table. The message holds the game's own JSON description of the hand at that moment, built only from what the player can see. The player's own seat has the id "hero".
 
 Answer in this exact shape, plain text, no headings, lists or markdown:
 Line 1: the advice in at most eight words, starting with the action and size, e.g. "Call 6." or "Raise to 24." or "Fold."
@@ -28,7 +28,7 @@ Rules:
 - Use an opponent's style and reads only if present; with empty reads there is no read yet. Never guess opponent cards.
 - Chips only: bare numbers, never a currency sign.`
 
-// The player's own settings (Settings → Ask Pip), sent with each question.
+// The player's own settings (Settings → Coach), sent with each question.
 export const COACH_STYLES = {
   short: 'Length: the advice line, then exactly one short sentence. Stop there.',
   standard: 'Length: the advice line, then at most three short sentences. Stop there.',
@@ -129,7 +129,11 @@ export function streamCoach(env, hand, prefs = coachPrefs(null), signal = null) 
       outcome.inputTokens = message.usage.input_tokens
       outcome.outputTokens = message.usage.output_tokens
       if (message.stop_reason === 'refusal')
-        await send({ type: 'error', code: 'coach_declined', message: "Pip can't answer that one." })
+        await send({
+          type: 'error',
+          code: 'coach_declined',
+          message: "The coach can't answer that one.",
+        })
       else await send({ type: 'done' })
     } catch (error) {
       stream.abort()

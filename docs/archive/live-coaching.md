@@ -1,7 +1,7 @@
 # Pip Live coaching
 
 > **Archived (2026-11-16).** Pip Live, the ChatGPT coaching, was replaced by
-> [Ask Pip](../ask-pip.md), which coaches inside the game in one model pass. This page
+> [the coach](../ask-coach.md) (first called Ask Pip), which coaches inside the game in one model pass. This page
 > describes the code at the tag `archive/chatgpt-live` (commit `50fb222`, the Worker
 > deployed on 2026-11-16 as version `1595168f`), not the code on `main`.
 >

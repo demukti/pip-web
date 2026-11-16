@@ -18,7 +18,7 @@ import { useSeatActions } from './useSeatActions'
 import { HandHistoryDialog } from './HandHistoryDialog'
 import { HandsHelpDialog } from './HandsHelpDialog'
 import { LeaveDialog } from './LeaveDialog'
-import { AskPipButton, AskPipCard } from './AskPip'
+import { AskCoachButton, AskCoachCard } from './AskCoach'
 import { PlayerDialog } from './PlayerDialog'
 import { RunRecap } from './RunRecap'
 import { useGame } from '@/store/game'
@@ -185,7 +185,7 @@ export function Table() {
   // exist next to "nothing you can buy changes a hand" (pip-web#120).
   const spectating = status === 'watching'
   // The one reveal rule for every seat: the engine's showdown reveal (shared
-  // with the hand record and Ask Pip's hand description), widened only for a
+  // with the hand record and the coach's hand description), widened only for a
   // spectator.
   const revealAll = (p: Player) =>
     showsHoleCards(hand, p) || (spectating && p.status !== 'folded' && p.status !== 'out')
@@ -405,7 +405,15 @@ export function Table() {
   // On a phone the bar has no room for these, so they sit in the corners of
   // your own panel: help on the left, where it never moves, last hand on the
   // right once there is one.
-  const phoneCorners = { left: helpButton, right: historyButton || undefined }
+  // The coach, once this browser is signed in, takes the free bottom-left
+  // corner of your panel on every width: under the thumb, beside the panel's
+  // other corner controls, away from the way out of the table.
+  const coachButton = <AskCoachButton hand={handIndex} />
+  const phoneCorners = {
+    left: helpButton,
+    right: historyButton || undefined,
+    bottomLeft: coachButton,
+  }
   const tableControls = (
     <>
       {historyButton}
@@ -476,14 +484,9 @@ export function Table() {
             >
               {talkLine}
             </div>
-
-            {/* Ask Pip, once this browser is signed in: the stage's top-left
-                corner is outside the oval, so it covers nothing and moves
-                nothing. The answer opens over the hero's own row, below. */}
-            <AskPipButton hand={handIndex} className="absolute left-2 top-0 z-10" />
           </div>
 
-          {/* the hero, at the near rail. The box positions Ask Pip's answer over
+          {/* the hero, at the near rail. The box positions the coach's answer over
               this row; it takes no z-index of its own, so the answer stacks
               against the whole table (over the hand's result banner, under the
               end-of-run overlay) while each row keeps its own z-20. */}
@@ -576,11 +579,12 @@ export function Table() {
                       isButton={hero.id === buttonPlayerId}
                       isActive={activeId === hero.id}
                       result={sessionResult}
+                      corners={{ bottomLeft: coachButton }}
                     />
                   </div>
                 </div>
               )}
-              <AskPipCard hand={handIndex} />
+              <AskCoachCard hand={handIndex} />
             </div>
           )}
 

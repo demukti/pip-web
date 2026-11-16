@@ -1,4 +1,4 @@
-// The hand as Ask Pip's coach sees it: an explicit, hero-visible projection of
+// The hand as the coach sees it: an explicit, hero-visible projection of
 // the engine, built when the player asks. Never serialize HandState directly: it
 // contains the undealt deck and every opponent's private cards.
 import { cardToString } from '@/lib/poker/cards'

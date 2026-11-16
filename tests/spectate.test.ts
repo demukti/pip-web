@@ -103,7 +103,7 @@ test('cards go face up for a spectator and for a showdown, and nothing else', (t
   const source = code(TABLE)
   t.regex(source, /const spectating = status === 'watching'/)
   // The showdown half is the engine's `showsHoleCards` (live hands at a real
-  // showdown only), the same rule Ask Pip's hand description reveals by.
+  // showdown only), the same rule the coach's hand description reveals by.
   t.regex(
     source,
     /const revealAll = \(p: Player\) =>\s*showsHoleCards\(hand, p\) \|\|\s*\(spectating && p\.status !== 'folded' && p\.status !== 'out'\)/,

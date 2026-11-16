@@ -2,7 +2,7 @@
 
 > **Archived (2026-11-16)** with [live-coaching.md](./live-coaching.md): the record of
 > Pip Live, the ChatGPT coaching, up to the tag `archive/chatgpt-live`. Batch F became
-> [Ask Pip](../ask-pip.md), which replaced it.
+> [the coach](../ask-coach.md) (first called Ask Pip), which replaced it.
 
 Audit of commit `4176069` ("add authenticated Pip live-state sharing for ChatGPT
 coaching"), checked 2026-11-15. Companion to [live-coaching.md](./live-coaching.md).
