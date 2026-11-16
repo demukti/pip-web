@@ -18,6 +18,7 @@ import { useSeatActions } from './useSeatActions'
 import { HandHistoryDialog } from './HandHistoryDialog'
 import { HandsHelpDialog } from './HandsHelpDialog'
 import { LeaveDialog } from './LeaveDialog'
+import { AskPipButton, AskPipCard } from './AskPip'
 import { LiveCoachingBadge } from './LiveCoachingBadge'
 import { PlayerDialog } from './PlayerDialog'
 import { RunRecap } from './RunRecap'
@@ -478,35 +479,69 @@ export function Table() {
             </div>
 
             {/* Live coaching, only while sharing: the stage's top-left corner is
-                outside the oval, so it covers nothing and moves nothing. */}
-            <LiveCoachingBadge className="absolute left-2 top-0 z-10" />
+                outside the oval, so it covers nothing and moves nothing. Ask Pip's
+                answer opens over the hero's own row, below. */}
+            <div className="absolute left-2 top-0 z-10 flex flex-col items-start gap-1.5">
+              <LiveCoachingBadge />
+              <AskPipButton hand={handIndex} />
+            </div>
           </div>
 
-          {/* the hero, at the near rail */}
-          {hero &&
-            heroMeta &&
-            (isMobile ? (
-              hand.variant === 'draw' ? (
-                /* **Five cards do not fit beside the panel on a phone.** The row
+          {/* the hero, at the near rail; Ask Pip's answer lies over this row */}
+          {hero && heroMeta && (
+            <div className="relative z-20">
+              {isMobile ? (
+                hand.variant === 'draw' ? (
+                  /* **Five cards do not fit beside the panel on a phone.** The row
                below splits the width in two, which works at two hole cards
                and just about at four; at five they run off the screen and
                under the panel. So a draw table stacks instead: the cards get
                the whole width on their own line — which they need anyway,
                because during the draw round they are buttons you have to be
                able to hit — and the panel sits under them. */
-                <div className="relative z-20 flex flex-col gap-2 px-3 pt-1">
-                  <div className="flex justify-center">
-                    <HeroCards
-                      back={cardBack}
-                      hero={hero}
-                      hand={hand}
-                      size="drill"
-                      discarding={drawing}
-                      marked={marked}
-                      onToggle={toggleMark}
-                    />
+                  <div className="relative z-20 flex flex-col gap-2 px-3 pt-1">
+                    <div className="flex justify-center">
+                      <HeroCards
+                        back={cardBack}
+                        hero={hero}
+                        hand={hand}
+                        size="drill"
+                        discarding={drawing}
+                        marked={marked}
+                        onToggle={toggleMark}
+                      />
+                    </div>
+                    <div className="flex items-stretch">
+                      <HeroPanel
+                        hero={hero}
+                        avatar={heroMeta.avatar}
+                        hand={hand}
+                        equity={heroEquity}
+                        hideOdds={!showOdds}
+                        isButton={hero.id === buttonPlayerId}
+                        isActive={activeId === hero.id}
+                        result={sessionResult}
+                        corners={phoneCorners}
+                      />
+                    </div>
                   </div>
-                  <div className="flex items-stretch">
+                ) : (
+                  <div className="relative z-20 flex items-stretch gap-3 px-3">
+                    {/* cards and panel each get exactly half the row (pl offsets
+                  the first card's tilt so its corner doesn't poke past) */}
+                    <div className="flex flex-1 basis-0 items-end justify-center pl-2">
+                      <HeroCards
+                        back={cardBack}
+                        hero={hero}
+                        hand={hand}
+                        size="hero"
+                        fanned
+                        tactile
+                        discarding={drawing}
+                        marked={marked}
+                        onToggle={toggleMark}
+                      />
+                    </div>
                     <HeroPanel
                       hero={hero}
                       avatar={heroMeta.avatar}
@@ -519,63 +554,36 @@ export function Table() {
                       corners={phoneCorners}
                     />
                   </div>
-                </div>
+                )
               ) : (
-                <div className="relative z-20 flex items-stretch gap-3 px-3">
-                  {/* cards and panel each get exactly half the row (pl offsets
-                  the first card's tilt so its corner doesn't poke past) */}
-                  <div className="flex flex-1 basis-0 items-end justify-center pl-2">
-                    <HeroCards
-                      back={cardBack}
+                <div className="relative z-20 flex items-stretch justify-center gap-6 px-6">
+                  <HeroCards
+                    back={cardBack}
+                    hero={hero}
+                    hand={hand}
+                    size="board"
+                    tactile
+                    discarding={drawing}
+                    marked={marked}
+                    onToggle={toggleMark}
+                  />
+                  <div className="flex w-44">
+                    <HeroPanel
                       hero={hero}
+                      avatar={heroMeta.avatar}
                       hand={hand}
-                      size="hero"
-                      fanned
-                      tactile
-                      discarding={drawing}
-                      marked={marked}
-                      onToggle={toggleMark}
+                      equity={heroEquity}
+                      hideOdds={!showOdds}
+                      isButton={hero.id === buttonPlayerId}
+                      isActive={activeId === hero.id}
+                      result={sessionResult}
                     />
                   </div>
-                  <HeroPanel
-                    hero={hero}
-                    avatar={heroMeta.avatar}
-                    hand={hand}
-                    equity={heroEquity}
-                    hideOdds={!showOdds}
-                    isButton={hero.id === buttonPlayerId}
-                    isActive={activeId === hero.id}
-                    result={sessionResult}
-                    corners={phoneCorners}
-                  />
                 </div>
-              )
-            ) : (
-              <div className="relative z-20 flex items-stretch justify-center gap-6 px-6">
-                <HeroCards
-                  back={cardBack}
-                  hero={hero}
-                  hand={hand}
-                  size="board"
-                  tactile
-                  discarding={drawing}
-                  marked={marked}
-                  onToggle={toggleMark}
-                />
-                <div className="flex w-44">
-                  <HeroPanel
-                    hero={hero}
-                    avatar={heroMeta.avatar}
-                    hand={hand}
-                    equity={heroEquity}
-                    hideOdds={!showOdds}
-                    isButton={hero.id === buttonPlayerId}
-                    isActive={activeId === hero.id}
-                    result={sessionResult}
-                  />
-                </div>
-              </div>
-            ))}
+              )}
+              <AskPipCard hand={handIndex} />
+            </div>
+          )}
 
           {/* actions, under the thumb */}
           <ActionRow compact={isMobile}>{actionArea}</ActionRow>

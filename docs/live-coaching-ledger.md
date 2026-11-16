@@ -156,3 +156,23 @@ IDs); the Tests column names them by title.
 Gate: `ava tests/live*.test.ts` → 90 passed (2026-11-15). Then `pnpm test:all`,
 deploy, refresh tool metadata, and the manual demonstration in the live coaching
 doc.
+
+### Batch F — Ask Pip, in-game coaching on demand (2026-11-16, branch `feat/in-game-coach`)
+
+Measured first. ChatGPT (via Codex, the same connector path) took 12–17 s per
+answer; the service's part was 22–62 ms per read and under 0.2 s per question in all.
+Putting the hand straight into the prompt halved it; the Claude API in one streamed
+pass gives first words in under a second. Full figures in the live coaching doc,
+Ask Pip. Needs a Worker deploy (the route, `ANTHROPIC_API_KEY` set as a secret) and a
+Pages deploy (the button and settings); no ChatGPT metadata refresh.
+
+| ID | Change | Tests |
+|----|--------|-------|
+| F1 | `POST /coach`: the publishing tab's credential, checked by the Durable Object with the writer, 6 a rolling minute; one streamed `claude-sonnet-5-5` answer as NDJSON on the stored snapshot; aborted when the player closes it. `live-state/coach.mjs`. | `liveCoach`: streams on the stored snapshot with no session identity; credential, writer and rate; no key; malformed and oversized questions; closing aborts the model call |
+| F2 | The player's settings: length (Short, Standard, Teach me) and up to 500 characters of their own notes, in this browser; the service settles both. | `liveCoach`: unknown style and long notes settled; settings store defaults, persists, survives bad storage; game and service agree on styles and the cap |
+| F3 | Ask Pip button under the badge and the answer card (placed by F7); Settings → Live coaching → Ask Pip. | UI: checked by running the app |
+| F4 | `pip_live_coach` log line: model, first-text and total time, tokens, stop, failure code and class. | `liveCoach`: allow-listed keys; no answer text; the API's error message never logged |
+| F5 | `tests/liveServiceFixture.ts`: the Worker fixture shared by `liveStateService` and `liveCoach`. | `liveStateService` unchanged, 22 pass |
+| F6 | Found in the first browser test against the deployed Worker: (a) the game stopped reading at the `done` line, so the request stayed open and was never logged; it now reads to the end. (b) Closing the card did not stop the model on Cloudflare, which does not cancel a streamed body when the client goes away; the request's signal now aborts the call (`enable_request_signal`), logged as `coach_closed`. (c) Standard answers ran long; each length now ends "Stop there." | `liveCoach`: "the answer is read to the end of the stream…"; "a client that disconnects stops the model call…" (fails with the hook removed); the close test checks `coach_closed` |
+| F7 | The answer card moved from under the button (over the felt's corner, where it hid an opponent's seat) to over the hero's own row; the button and card share one answer in `askPip.ts`. Checked at 1280×800 and 375×812. | `liveCoach`: the shared answer streams and stays for its hand, the next deal retires it, closing or asking again stops it, failures keep what was written, each ask sends the settings of that moment |
+

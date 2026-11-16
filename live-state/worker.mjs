@@ -2,13 +2,14 @@ import OAuthProvider, {
   AuthorizationError,
   CimdFetchError,
 } from '@cloudflare/workers-oauth-provider'
+import { COACH_MODEL, coachPrefs, streamCoach } from './coach.mjs'
 import { bearer, bodyText, hash, json, noCache, READ_META, secretMatches } from './http.mjs'
 export { LiveState } from './session.mjs'
 
 const READ = 'hand:read'
 // One line per request to these paths, for an ad-hoc `wrangler tail`; any other
 // path logs only when it failed with an exception.
-const LOGGED = new Set(['/mcp', '/mcp/current', '/token', '/register'])
+const LOGGED = new Set(['/mcp', '/mcp/current', '/token', '/register', '/coach'])
 const RPC_METHODS = new Set([
   'initialize',
   'notifications/initialized',
@@ -217,11 +218,64 @@ const protectedApi = {
   },
 }
 
+// Ask Pip: the publishing tab's own credential, checked and rate-limited by the
+// Durable Object, which hands back the stored snapshot; the answer streams as NDJSON.
+async function coach(request, env, ctx) {
+  const trace = traces.get(request) ?? { start: Date.now(), requestId: crypto.randomUUID() }
+  if (!env.ANTHROPIC_API_KEY)
+    return json({ error: 'Ask Pip is not set up on the service', code: 'coach_off' }, 503)
+  let prefs
+  try {
+    prefs = coachPrefs(JSON.parse(await bodyText(request, 4096)))
+  } catch {
+    return json({ error: 'Invalid request body' }, 400)
+  }
+  // The object checks the credential and the rate; it needs no part of the body.
+  const forwarded = new Request(request.url, {
+    method: 'POST',
+    headers: request.headers,
+    body: '{}',
+  })
+  forwarded.headers.set('X-Owner-Epoch', await ownerEpoch(env))
+  const answer = await internal(env, '/coach', forwarded)
+  if (!answer.ok) return answer
+  const read = JSON.parse(await answer.text())
+  trace.read = {
+    version: read.version ?? null,
+    stale: read.stale ?? null,
+    pending: read.pending ?? null,
+  }
+  const { body, finished } = streamCoach(env, read, prefs, request.signal)
+  // The request line is written when the stream starts; this one when it ends.
+  ctx?.waitUntil?.(
+    finished.then((outcome) =>
+      console.info(
+        JSON.stringify({
+          event: 'pip_live_coach',
+          requestId: trace.requestId,
+          model: COACH_MODEL,
+          firstTextMs: outcome.firstTextMs,
+          totalMs: outcome.totalMs,
+          inputTokens: outcome.inputTokens,
+          outputTokens: outcome.outputTokens,
+          stop: outcome.stop,
+          code: outcome.code,
+          error: outcome.error ? errorClass(outcome.error) : undefined,
+        }),
+      ),
+    ),
+  )
+  return new Response(body, {
+    headers: { ...noCache, 'Content-Type': 'application/x-ndjson; charset=utf-8' },
+  })
+}
+
 const defaultHandler = {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname
     if (path === '/health' && request.method === 'GET')
       return json({ ok: true, service: 'pip-live-state' })
+    if (path === '/coach' && request.method === 'POST') return coach(request, env, ctx)
     if (path === '/authorize') {
       try {
         return await authorize(request, env)

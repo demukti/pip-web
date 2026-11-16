@@ -13,8 +13,15 @@ owner's ChatGPT workspace. Any later change to the tool description needs that
 metadata refresh again. Deploys run on pushes to `main` while `PIP_TUTOR_ENABLED`
 is `true`.
 
-No automated poker decisions or model API calls were added. The poker rules are
-unchanged; the engine gained one pure helper, `showsHoleCards`.
+Ask Pip (in-game coaching on the Claude API, Batch F, 2026-11-16) is on the branch
+`feat/in-game-coach`. Its Worker was deployed by hand from that branch on 2026-11-16
+(version `1595168f`), with the secret `ANTHROPIC_API_KEY` set; the hosted game does not
+have the button until the branch reaches `main`. Until then, a push to `main` would
+redeploy the Worker without `/coach`.
+
+The poker rules are unchanged; the engine gained one pure helper, `showsHoleCards`.
+The service makes one kind of model call, and only when the player asks for it:
+**Ask Pip** (below), added on 2026-11-16. Nothing advises on its own.
 
 ## Architecture
 
@@ -103,10 +110,102 @@ A small badge at the table mirrors the Settings status:
 
 Nothing shows when sharing was never on, was stopped, or another tab holds it.
 
-No AI API subscription or per-token billing is introduced. Existing ChatGPT Voice
-limits and Cloudflare hosting/storage quotas apply. Disable script observability
+ChatGPT reads cost nothing beyond ChatGPT's own limits and Cloudflare's quotas. Ask Pip
+is billed per question to the owner's Claude API organization (see below). Disable script observability
 for private data (the supplied config does); no application code logs cards,
 credentials or OAuth callback parameters.
+
+## Ask Pip (in-game coaching)
+
+ChatGPT answers took 12–17 seconds when measured on 2026-11-16, and almost none of
+that was the service: every read took 22–62 ms. The rest was the model working twice
+per question, once to decide to fetch the hand and once to answer. Ask Pip
+answers inside the game in one model pass, with the hand already in the prompt.
+
+**On demand only.** A small **Ask Pip** button sits under the badge while this tab
+shares. Pressing it streams an answer into a card laid over your own row (your cards
+and panel): the first line is the advice ("Call 6."), then why. A hand you don't ask
+about costs nothing.
+
+**Where the card goes.** Over the hero's row, anchored to its foot, as tall as the
+row (at least 12rem, scrolling past that), on desktop and phone alike. It never covers
+a seat, the board or the pot; what it hides is what the advice already speaks for.
+The first version opened under the button, over the felt's corner, and in the
+browser test it hid an opponent's seat and stack. The button and the card sit apart,
+so they share one answer (`src/lib/liveCoaching/askPip.ts`, no React): asking again,
+the card's ✕, or the deal moving on stops an answer still being written.
+
+**How it flows.**
+
+1. The game (`src/lib/liveCoaching/coach.ts`, `LivePublisher.coach`) waits up to 3 s
+   for an upload in flight, so the answer sees the latest move, then sends `POST
+   /coach` with the tab's own publishing credential and the player's coaching settings.
+2. The Worker reads the settings (body at most 4 KB) and asks the Durable Object,
+   which checks the credential and the writer exactly as for an upload, applies the
+   rate (6 questions a rolling minute, memory only) and returns the stored snapshot.
+   Nothing the browser sends reaches the model except the two settings.
+3. `live-state/coach.mjs` streams one Claude answer back as NDJSON: `text` lines, then
+   one `done` or `error` (with a message fit to show the player). The game reads the
+   body to its very end even after the last line: a body left half-read keeps the
+   request open, and the Worker then never finishes or logs it.
+4. If the player closes the card (or the tab), the model call is aborted at once, so
+   the rest of the answer is never generated or billed. On Cloudflare a dropped
+   connection does not cancel the response body, so the incoming request's own
+   signal does it; that needs the `enable_request_signal` compatibility flag in
+   `wrangler.jsonc`. A cancelled body is the second trigger, for any other host.
+
+**The model.** `claude-sonnet-5-5`, effort `low`, at most 1024 tokens, with the API's
+server-side refusal fallback (`fallbacks: "default"`). Measured on four made-up spots
+(2026-11-16):
+
+| Model | First words | Whole answer | Note |
+| --- | --- | --- | --- |
+| Sonnet 5.5, low effort | 0.7–1.0 s | 1.7–2.2 s | Chosen: cleanest advice |
+| Sonnet 5.5, thinking off | 0.6–1.1 s | 1.6–2.7 s | No faster in practice |
+| Haiku 5.5, thinking off | 0.9–1.7 s | 1.7–2.7 s | Gave the wrong outs for a straight draw |
+| Opus 5.5, low effort | 2.3–3.1 s | 3.4–4.3 s | Good, slowest |
+
+About 1,000 tokens in and 100–150 out: roughly 0.35 cents a question at Sonnet 5.5
+prices. The system prompt is under the minimum cacheable length, so it is not cached.
+
+**What the model sees.** Fixed rules (`COACH_SYSTEM`): the answer's shape, no advice
+when stale, not the hero's turn or the run is over, the snapshot's own equity, pot
+odds and hand name rather than its own arithmetic, legal actions only, reads only when
+present, never a guessed card, chips without a currency sign. Then the player's
+length, then the player's notes, told to yield to the rules. The user message is the
+snapshot reduced to `{ active, stale, pending, hand }`: no session ID or timestamps.
+
+**The player's settings** (Settings → Live coaching → Ask Pip), kept in this browser
+under `pip.live-coach.v1` and sent with each question, so a change applies to the next:
+
+- **Length:** Short (the call and one line), Standard (the call and why, at most three
+  sentences, the default) or Teach me (the idea behind it, four to six). Each ends with
+  "Stop there.": without it, Standard ran to five sentences in the first browser test.
+- **How should Pip coach you?** Up to 500 characters in the player's own words.
+  The service also trims and caps it, and ignores an unknown length.
+
+**Setup.** Create an API key in the Claude Console (platform.claude.com → API keys),
+in the organization that holds the credits, and store it on the Worker:
+
+```sh
+corepack pnpm exec wrangler secret put ANTHROPIC_API_KEY --config live-state/wrangler.jsonc
+```
+
+Without the secret, `/coach` answers 503 `coach_off` and the card says Ask Pip isn't
+set up. A refused key shows as "The coach's API key was refused. Replace it."
+
+**Logs.** `/coach` writes the usual `pip_live_request` line when the answer starts
+(status, `ms` to the start, version, stale), and a `pip_live_coach` line when it ends:
+`model`, `firstTextMs`, `totalMs`, `inputTokens`, `outputTokens`, `stop`, and on failure
+`code` and the exception's class name (`coach_closed` with `APIUserAbortError` when
+the player closed the answer). Never the question, the notes or the answer.
+
+**Taking it upstream.** The parts are separable: `coach.mjs` takes a snapshot and
+settings and returns a stream; `coach.ts` and `AskPip.tsx` know only `LivePublisher`'s
+`coach()`. What is single-owner here is the gate in front: a publishing session made
+with the owner key, and one organization paying. Upstream would put the same route
+behind its own account sign-in, with a per-player rate and a decision on who pays
+(the membership, per docs/membership.md, already lists coaching among what it sells).
 
 ## First deployment (local terminal)
 
@@ -358,8 +457,8 @@ git fetch upstream --tags
 ```
 
 The add-on's own files (`live-state/`, `src/lib/liveCoaching/`,
-`LiveCoachingSection.tsx`, `LiveCoachingBadge.tsx`, `tests/live*.test.ts`,
-`tests/cloudflareLoader.mjs`, `deploy-pip-tutor.yaml`, these two docs) do not exist
+`LiveCoachingSection.tsx`, `LiveCoachingBadge.tsx`, `AskPip.tsx`, `tests/live*.test.ts`,
+`tests/liveServiceFixture.ts`, `tests/cloudflareLoader.mjs`, `deploy-pip-tutor.yaml`, these two docs) do not exist
 upstream. A merge can conflict only where the add-on touches upstream files:
 
 | File | Add-on change |
@@ -367,10 +466,10 @@ upstream. A merge can conflict only where the add-on touches upstream files:
 | `src/store/game.ts` | Imports `livePublisher`; four `livePublisher.capture` calls (hand complete, hero turn with equity, AI turn, `leave()`); `buildHandRecord` reveals by `showsHoleCards` |
 | `src/lib/poker/engine.ts`, `tests/engine.test.ts` | `showsHoleCards` and its tests |
 | `src/components/AppBoot.tsx` | `livePublisher.start()` and `startTableContext()`; both stopped on unmount |
-| `src/components/table/Table.tsx`, `tests/spectate.test.ts` | The badge; `revealAll` via `showsHoleCards`, and the spectate test's matching regex |
+| `src/components/table/Table.tsx`, `tests/spectate.test.ts` | The badge with `<AskPipButton>` under it; the hero's row wrapped in a positioned box holding `<AskPipCard>`; `revealAll` via `showsHoleCards`, and the spectate test's matching regex |
 | `src/components/settings/SettingsDialog.tsx`, `SettingsScreen.tsx` | `<LiveCoachingSection />` |
 | `.github/workflows/deploy-cloudflare-pages.yaml` | Gated to `playpip/pip-web` |
-| `package.json`, `pnpm-lock.yaml` | `@cloudflare/workers-oauth-provider` |
+| `package.json`, `pnpm-lock.yaml` | `@cloudflare/workers-oauth-provider`, `@anthropic-ai/sdk` |
 | `knip.json` | `live-state/worker.mjs` entry |
 | `.env.example` | `NEXT_PUBLIC_LIVE_STATE_URL` |
 
@@ -387,10 +486,11 @@ a merge, still play a hand with sharing on.
 
 | Area | Status |
 | --- | --- |
-| Automated, `ava tests/live*.test.ts` | 90 pass (2026-11-15): snapshot privacy and fields including this batch's (`liveCoachingState`, 26), publisher against a fake service (`livePublisher`, 30), hook guard (`liveCoachingHooks`, 8), the table context against the real game and profile stores with a real game played in Node, including the run-status re-publish and spectating (`liveCoachingTable`, 4), and the real Worker, Durable Object and OAuth library with in-memory bindings, driven by the real engine and the real publisher (`liveStateService`, 22), including sliding expiry end to end |
+| Automated, `ava tests/live*.test.ts` | 112 pass (2026-11-16; full suite 1932): the 90 below plus Ask Pip (`liveCoach`, 22): the real Worker and Durable Object with the real Anthropic SDK against a stand-in API (the answer stream, what the model is sent, the credential, writer and rate checks, no key, a malformed or oversized question, settings settled, failures and refusals, a closed answer aborting the model call, the log lines), the real publisher asking after its upload lands, the NDJSON reader read to the end of the stream, a client disconnect stopping the model, the shared answer state, and the settings store. Earlier, 90 pass (2026-11-15): snapshot privacy and fields (`liveCoachingState`, 26), publisher against a fake service (`livePublisher`, 30), hook guard (`liveCoachingHooks`, 8), the table context against the real game and profile stores with a real game played in Node, including the run-status re-publish and spectating (`liveCoachingTable`, 4), and the real Worker, Durable Object and OAuth library with in-memory bindings, driven by the real engine and the real publisher (`liveStateService`, 22), including sliding expiry end to end |
 | Automated, full suite | Run by `pnpm test:all`, the gate before every push |
 | By hand, owner report 2026-11-15 | On the `cd6ae72` deployment: `Live · version N` in the real game; private OAuth text chat and iPhone Live retrieval both work. On the `624c521` deployment: ChatGPT reads the new fields (hand name, opponents' style and reads, table). Tool versions and timestamps not recorded |
-| Unverified | In a real browser: each badge state, the Settings copy and Dismiss button, and the run-over `brief` as ChatGPT reads it. Also, from before: second-device retrieval, displayed-equity comparison against the odds panel, stale reporting after closing the tab |
+| By hand, 2026-11-16 | Ask Pip, local game (`localhost:3000`) against the deployed Worker and the real API: the button under the badge, answers streaming into the card (first words 0.7–1.1 s, done 1.3–2.7 s from the click), Standard at three sentences, Short shorter, the settings switch and notes box, ✕ closing mid-answer stopping the model call (logged `coach_closed` at 933 ms), and both log lines for every question |
+| Unverified | Ask Pip: Teach me and the notes as the model applies them, a refused key, the rate limit, a phone-width table. In a real browser: each badge state, the Settings copy and Dismiss button, and the run-over `brief` as ChatGPT reads it. Also, from before: second-device retrieval, displayed-equity comparison against the odds panel, stale reporting after closing the tab |
 
 For the deployed demonstration: connect the real game, fetch its initial state,
 make a move, fetch again, and repeat at least four times through an unfinished

@@ -67,6 +67,18 @@ const browserEvents: LiveEvents = {
   },
 }
 
+/** How long Ask Pip waits for an upload in flight, so the answer sees the latest move. */
+const COACH_WAIT_MS = 3000
+/** A whole streamed answer; the service itself gives the model 30 seconds. */
+const COACH_TIMEOUT_MS = 45_000
+
+const headersFor = (connection: Connection, writerId: string) => ({
+  'Content-Type': 'application/json',
+  Authorization: `Bearer ${connection.token}`,
+  'X-Pip-Session': connection.sessionId,
+  'X-Pip-Writer': writerId,
+})
+
 /** Another tab claimed the shared session: stop here without touching storage. */
 class WriterLost extends Error {}
 
@@ -234,15 +246,29 @@ export class LivePublisher {
     if (!connection) throw new Error('No publishing session')
     return this.request(`${connection.url}${path}`, {
       method,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${connection.token}`,
-        'X-Pip-Session': connection.sessionId,
-        'X-Pip-Writer': writerId,
-      },
+      headers: headersFor(connection, writerId),
       body: body === undefined ? undefined : JSON.stringify(body),
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
+    })
+  }
+  /**
+   * Ask Pip: once the newest capture has been accepted (or after a short wait),
+   * ask the service for a coaching answer on the stored snapshot. Resolves to the
+   * streaming response; `coach.ts` reads it. Only the tab that publishes can ask.
+   */
+  async coach(prefs: unknown, signal: AbortSignal) {
+    if (!this.connection || !this.ready) throw new Error('Not sharing from this tab')
+    this.pump()
+    await Promise.race([this.flush(), new Promise((resolve) => setTimeout(resolve, COACH_WAIT_MS))])
+    const connection = this.connection
+    if (!connection) throw new Error('Not sharing from this tab')
+    return this.request(`${connection.url}/coach`, {
+      method: 'POST',
+      headers: headersFor(connection, this.writerId),
+      body: JSON.stringify(prefs),
+      cache: 'no-store',
+      signal: AbortSignal.any([signal, AbortSignal.timeout(COACH_TIMEOUT_MS)]),
     })
   }
   async connect(url: string, ownerKey: string) {

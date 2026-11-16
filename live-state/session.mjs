@@ -14,6 +14,9 @@ const STATE = 'state'
 // The original single-record format. Those sessions lasted at most 12 hours, so a
 // leftover record is treated as no session and deleted rather than migrated.
 const LEGACY = 'session'
+// Ask Pip answers per rolling minute: each one is a paid model call, so a stuck
+// button or a script cannot run up the bill.
+export const COACH_PER_MINUTE = 6
 
 const slide = (session, now) => {
   session.expiresAt = Math.min(now + SESSION_MS, session.createdAt + MAX_SESSION_MS)
@@ -28,6 +31,9 @@ export class LiveState {
     this.meta = null
     this.state = null
     this.savedSeenAt = 0
+    // When recent Ask Pip requests were let through. Memory only: a restart forgets
+    // at most one minute's count.
+    this.coachAsked = []
   }
 
   async fetch(request) {
@@ -185,6 +191,20 @@ export class LiveState {
     if (path === '/revoke') {
       await this.clear()
       return json({ revoked: true })
+    }
+    if (path === '/coach') {
+      // The publishing tab asks; the answer is built from the stored snapshot, the
+      // same one ChatGPT reads, so nothing the browser sends reaches the model.
+      this.coachAsked = this.coachAsked.filter((at) => now - at < 60_000)
+      if (this.coachAsked.length >= COACH_PER_MINUTE) {
+        const retryAfterMs = 60_000 - (now - this.coachAsked[0])
+        return json(
+          { error: 'Too many questions this minute', code: 'coach_limit', retryAfterMs },
+          429,
+        )
+      }
+      this.coachAsked.push(now)
+      return this.read(request, now)
     }
     if (path === '/heartbeat') {
       if (!Number.isSafeInteger(data.version) || data.version < 0)
