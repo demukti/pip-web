@@ -11,10 +11,18 @@ export interface CoachPrefs {
   notes: string
 }
 
-export const COACH_STYLES: { value: CoachStyle; label: string; sub: string }[] = [
-  { value: 'short', label: 'Short', sub: 'The call and one line' },
-  { value: 'standard', label: 'Standard', sub: 'The call and why' },
-  { value: 'teach', label: 'Teach me', sub: 'The idea behind it' },
+/**
+ * The lengths, as Settings offers them. `about` is said under the picker for
+ * the one picked: a third of a phone's width has room for the label only.
+ */
+export const COACH_STYLES: { value: CoachStyle; label: string; about: string }[] = [
+  { value: 'short', label: 'Short', about: 'The call, and one line on why.' },
+  { value: 'standard', label: 'Standard', about: 'The call, and why in a few sentences.' },
+  {
+    value: 'teach',
+    label: 'Teach me',
+    about: 'The call, and the idea behind it: odds, position, what they might hold.',
+  },
 ]
 export const NOTES_MAX = 500
 

@@ -32,7 +32,7 @@ export function Segmented<T extends number>({
               onPick(option.value)
             }}
             aria-pressed={picked}
-            className="relative flex-1 rounded-xl px-2 py-1.5 transition active:scale-[0.97]"
+            className="relative min-w-0 flex-1 rounded-xl px-2 py-1.5 transition active:scale-[0.97]"
           >
             {picked && (
               <motion.span

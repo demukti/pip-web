@@ -114,19 +114,21 @@ function SignIn({ message }: { message: string }) {
  */
 function AskCoachSettings() {
   const prefs = useSyncExternalStore(coachPrefs.subscribe, coachPrefs.get, coachPrefs.getServer)
-  const picked = COACH_STYLES.findIndex((style) => style.value === prefs.style)
+  const picked = Math.max(
+    COACH_STYLES.findIndex((style) => style.value === prefs.style),
+    0,
+  )
   return (
     <div className="mt-5 flex flex-col gap-3 border-t border-foreground/10 pt-4">
       <h3 className="text-sm font-semibold">How the coach answers</h3>
-      <Segmented
-        options={COACH_STYLES.map((style, index) => ({
-          value: index,
-          label: style.label,
-          sub: style.sub,
-        }))}
-        value={Math.max(picked, 0)}
-        onPick={(index) => coachPrefs.set({ style: COACH_STYLES[index].value })}
-      />
+      <div className="flex flex-col gap-1.5">
+        <Segmented
+          options={COACH_STYLES.map((style, index) => ({ value: index, label: style.label }))}
+          value={picked}
+          onPick={(index) => coachPrefs.set({ style: COACH_STYLES[index].value })}
+        />
+        <p className="px-1 text-xs text-muted-foreground">{COACH_STYLES[picked].about}</p>
+      </div>
       <label className="text-sm">
         How do you want to be coached?
         <textarea

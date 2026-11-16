@@ -95,7 +95,9 @@ Settings → Coach → How the coach answers, kept in this browser under
 next one:
 
 - **Length:** Short (the call and one line), Standard (the call and why, at most three
-  sentences, the default) or Teach me (the idea behind it, four to six). Each ends with
+  sentences, the default) or Teach me (the idea behind it, four to six). The picker
+  shows the labels only, with the picked one explained in a line under it: labels
+  with subtitles ran past the picker's edge on an iPhone 16 Pro. Each ends with
   "Stop there.": without it, Standard ran to five sentences in the first browser test.
 - **How do you want to be coached?** Up to 500 characters in the player's own words.
   The service also trims and caps it, and ignores an unknown length.
@@ -233,6 +235,7 @@ The coach's own files (`live-state/`, `src/lib/askCoach/`, `AskCoach.tsx`,
 | `src/components/AppBoot.tsx` | `startAskCoach()`, stopped on unmount |
 | `src/components/table/Table.tsx` | `coachButton` in the `HeroPanel` corners (`bottomLeft`, phone and desktop); the hero's row wrapped in `<div className="relative">` holding `<AskCoachCard>`; `revealAll` via `showsHoleCards` |
 | `src/components/settings/SettingsDialog.tsx`, `SettingsScreen.tsx` | `<AskCoachSection />` |
+| `src/components/ui/segmented.tsx` | `min-w-0` on each option, so its own `truncate` can work: without it a long label widened its option past the track (the length picker on a 320px phone). A fix upstream can take as it is |
 | `src/store/game.ts` | `buildHandRecord` reveals by `showsHoleCards` (no coach code) |
 | `src/lib/poker/engine.ts`, `tests/engine.test.ts`, `tests/spectate.test.ts` | `showsHoleCards`, its tests, and the spectate test's matching regex |
 | `.github/workflows/deploy-cloudflare-pages.yaml` | Gated to `playpip/pip-web` |
