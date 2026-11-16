@@ -10,11 +10,11 @@ In code it is `askCoach` (`src/lib/askCoach/`), never plain `coach`: upstream's
 player sees "Coach"; it was called "Ask Pip" until 2026-11-16, renamed because the
 answer is not Pip talking.
 
-Status (2026-11-16): on the branch `feat/in-game-coach`. Its Worker was deployed by
-hand from that branch (version `68630224`, with follow-ups; a game with follow-ups needs
-a Worker that reads `thread`, or each follow-up is answered as the first question
-again); the hosted game has no button until the
-branch reaches `main`, whose push also redeploys the Worker. It replaces
+Status (2026-11-16): live on the fork's `main`, follow-ups included. Each push to
+`main` deploys the game and the Worker together (`deploy-pip-tutor.yaml`; Worker
+version `8b7d285b` from `501b904`). Deploy the Worker by hand only alongside the game
+it serves: a game with follow-ups needs a Worker that reads `thread`, or each
+follow-up is answered as the first question again. It replaces
 the ChatGPT coaching ("Pip Live"), which is archived at the tag `archive/chatgpt-live`
 with its docs in [archive/](./archive/live-coaching.md). The poker rules are
 unchanged; the engine gained one pure helper, `showsHoleCards`.
