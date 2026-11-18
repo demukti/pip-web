@@ -201,16 +201,25 @@ test.serial('busted, then spectating: the place the player really finished', asy
     t.true(busted.brief.endsWith(`You are out in ${ordinal(place)}.`))
 
     useGame.getState().watchItOut()
-    // The store itself goes watching → playing → busted for each spectated hand
-    // (dealHand sets `playing`; the bust branch runs again at its end).
-    await play((s) => s === 'playing')
+    // Spectated hands deal on as `watching`, down to the last player standing.
     const watching = currentHand()!
     t.like(watching.table, { status: 'watching', place })
     t.true(
       watching.brief.endsWith(`You are out in ${ordinal(place)}, watching the table play out.`),
     )
-    await play((s) => s === 'busted')
-    t.like(currentHand()!.table, { status: 'busted', place })
+    // On into the next spectated hand (or the table's end), bounded by time:
+    // AI moves run on timers.
+    const first = useGame.getState().handIndex
+    const tableLeft = () => useGame.getState().seats.filter((s) => s.stack > 0).length
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline && useGame.getState().handIndex === first && tableLeft() > 1) {
+      await turn()
+    }
+    t.true(
+      useGame.getState().handIndex > first || tableLeft() === 1,
+      'the spectated table never moved on',
+    )
+    t.like(currentHand()!.table, { status: 'watching', place })
 
     // If the store's recomputed place differs, the description keeps the real one.
     useGame.setState({ status: 'busted', place: Math.max(1, place - 1) })
