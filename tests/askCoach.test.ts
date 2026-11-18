@@ -54,6 +54,8 @@ const ALLOWED_ANSWER_LOG = [
   'firstTextMs',
   'totalMs',
   'inputTokens',
+  'cacheReadTokens',
+  'cacheWriteTokens',
   'outputTokens',
   'stop',
   'solver',
@@ -165,7 +167,7 @@ async function nextAnswerLog(before: number) {
 interface ModelCall {
   body: {
     model: string
-    system: { type: string; text: string }[]
+    system: { type: string; text: string; cache_control?: { type: string } }[]
     messages: { role: string; content: string }[]
     output_config?: { effort?: string }
     fallbacks?: unknown
@@ -191,7 +193,12 @@ function answerEvents(chunks: string[], stop = 'end_turn') {
         content: [],
         stop_reason: null,
         stop_sequence: null,
-        usage: { input_tokens: 900, output_tokens: 1 },
+        usage: {
+          input_tokens: 900,
+          cache_read_input_tokens: 1197,
+          cache_creation_input_tokens: 0,
+          output_tokens: 1,
+        },
       },
     },
     { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
@@ -536,6 +543,10 @@ test.serial('the answer streams on the hand the game sent, exactly as sent', asy
   t.regex(call.body.system[0].text, /Never guess opponent cards/)
   t.is(call.body.system[1].text, SERVICE_STYLES.teach)
   t.true(call.body.system[2].text.endsWith('\nBe blunt.'))
+  // Only the fixed rules are cached, so every length and set of notes shares one entry.
+  t.deepEqual(call.body.system[0].cache_control, { type: 'ephemeral' })
+  t.is(call.body.system[1].cache_control, undefined)
+  t.is(call.body.system[2].cache_control, undefined)
   // The model sees the hand and nothing else: no token, no settings.
   t.deepEqual(JSON.parse(call.body.messages[0].content), { hand: HAND })
   t.false(call.body.messages[0].content.includes(bearer))
@@ -544,6 +555,8 @@ test.serial('the answer streams on the hand the game sent, exactly as sent', asy
   t.is(answer?.model, 'claude-sonnet-5-5')
   t.is(answer?.stop, 'end_turn')
   t.is(answer?.outputTokens, 42)
+  t.is(answer?.cacheReadTokens, 1197)
+  t.is(answer?.cacheWriteTokens, 0)
   t.true(Number.isFinite(answer?.firstTextMs) && Number.isFinite(answer?.totalMs))
   t.true(Object.keys(answer).every((name) => ALLOWED_ANSWER_LOG.includes(name)))
   const request = logs('ask_coach_request').find((entry) => entry.requestId === answer?.requestId)

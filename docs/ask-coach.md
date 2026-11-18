@@ -82,12 +82,22 @@ Measured on four made-up spots (2026-11-16):
 | Haiku 5.5, thinking off | 0.9–1.7 s | 1.7–2.7 s | Gave the wrong outs for a straight draw |
 | Opus 5.5, low effort | 2.3–3.1 s | 3.4–4.3 s | Good, slowest |
 
-About 1,000 tokens in and 100–150 out: roughly 0.35 cents a question. A follow-up
-sends the whole conversation again, about 200 tokens more each time: 0.4–0.5 cents,
-so a question and three follow-ups come to about 1.6 cents. Nothing is cached:
-Sonnet 5.5 caches prefixes from 512 tokens, but most questions get no follow-up, and
-writing the cache costs 1.25 times the input on every first question to save about
-0.2 cents on each follow-up.
+About 2,480 tokens in and 100–220 out (2026-11-18, with the charts): roughly 0.7 cents a
+question before caching. A follow-up sends the whole conversation again, about 200
+tokens more each time.
+
+**Caching.** The fixed rules (`COACH_SYSTEM`, 1,197 tokens by the API's count,
+2026-11-18) carry the only cache mark, so every question shares one entry, whatever its
+length setting or notes. The entry lasts 5 minutes from its last use. A question within
+5 minutes of the last one reads the rules for about 0.01 cents instead of 0.24, so it
+costs about a third less. The first question after a pause writes them for about 0.06
+cents extra. Caching pays once more than about one question in five reads the entry.
+The hand, the conversation and the settings are not cached: most questions get no
+follow-up, and writing the whole first question to save about 0.2 cents on a follow-up
+would cost more than it saves. Sonnet 5.5 caches nothing under 512 tokens, so if the
+rules are ever cut below that, take the mark off. A changed byte in the rules starts a
+new entry; that is expected after an edit. `ask_coach_answer` logs `cacheReadTokens`
+and `cacheWriteTokens`.
 
 **What the model sees.** Fixed rules (`COACH_SYSTEM`): the answer's shape; no advice
 when it is not the hero's turn or the run is over; the description's own equity, pot
@@ -372,7 +382,9 @@ answer, a token or a key:
   `status`, `ms`, `colo`, `hasBearer`, and an exception's class name if one escaped.
   For `/coach` it is written when the answer starts.
 - `ask_coach_answer`, when an answer ends, with the same `requestId`: `model`,
-  `firstTextMs`, `totalMs`, `inputTokens`, `outputTokens`, `stop`, and on failure `code`
+  `firstTextMs`, `totalMs`, `inputTokens` (only the part neither read from nor written to
+  the cache), `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`, `stop`, and on
+  failure `code`
   and the exception's class name. `coach_closed` with `APIUserAbortError` means the
   answer was dropped mid-way (the player acted, asked again, the deal moved on or the
   player left) and the model call was stopped.
@@ -444,4 +456,5 @@ who pays (docs/membership.md already lists coaching among what the membership se
 | By hand, 2026-11-18, the two fixes, deployed (`30195af`) | Played at the Downtown Casino before the fixes: K-J offsuit in the big blind against a button raise at 48 big blinds, "Call 149." written by the model (no line from the service at that depth), citing the chart; and 6-5 suited on the button against a hijack raise at 31 big blinds, "Raise to 1215.", the fault the second fix is for. Replayed against the live service after the deploy with hands built to match: the same 6-5 suited spot now "Fold.", calling the deep answer a starting point; 4-3 offsuit in the cutoff against a hijack raise, "Fold." with no position mistake; A-Q offsuit on the button against a cutoff raise, "Raise to 375." from the service, with "you act after her on every street". The Teach me answers ran to nine or ten sentences, over their six |
 | Automated, 2026-11-18, calling an all-in | 107 pass with the 3 added. `askCoachHand` (2 more; one earlier case moved): a six big blind shove from a real hand gives `callChart` equal to the shove chart's own range, value and margin for the big blind; a forty big blind all-in has none; a covered hero reads the chart at its own stack. `askCoachSolver` (1 more): the advice line for call and fold, none for close or a deep all-in, and the raise chart never answering an all-in |
 | By hand, 2026-11-18, heads-up, deployed (`30195af`) | The Challenge, two-handed at 67 big blinds. On the button with 8-3 suited the game sent `firstIn` with two players dealt, the chart mixes a raise and a limp there, so the model chose: "Call 60.", with the pattern and "you act last after the flop". The big blind's two spots, replayed against the live service with hands built to match: Q-7 offsuit against a raise to 300, "Call 180."; 7-2 offsuit after a limp, "Check."; aces after a limp, "Raise to 420."; each line from the service in 0.07 to 0.14 s, each reason with the big blind acting first after the flop |
+| By hand, 2026-11-18, caching, not deployed | `streamCoach` run in Node against the real API with the same flop hand twice, seconds apart, Standard then Teach me: the first wrote the rules to the cache (`cacheWriteTokens` 1,199, 156 uncached in, 110 out), the second read them (`cacheReadTokens` 1,199, 192 uncached in, 314 out), so the two lengths share one entry. `askCoach` checks the mark sits on the rules alone and the cache counts reach the log |
 | Unverified | The notes as the model applies them (Teach me ran to seven sentences once, one over its six), a refused API key, the rate limit as the player sees it, the bulb on a real phone (touch); follow-ups against the real model, the sheet on a real iPhone with the keyboard and dictation open (the visual-viewport sizing), and the sheet in Firefox and Safari |

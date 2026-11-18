@@ -69,6 +69,8 @@ async function coach(request, env, ctx, trace) {
           firstTextMs: outcome.firstTextMs,
           totalMs: outcome.totalMs,
           inputTokens: outcome.inputTokens,
+          cacheReadTokens: outcome.cacheReadTokens,
+          cacheWriteTokens: outcome.cacheWriteTokens,
           outputTokens: outcome.outputTokens,
           stop: outcome.stop,
           solver: outcome.solver,

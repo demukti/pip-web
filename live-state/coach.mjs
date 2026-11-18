@@ -11,7 +11,8 @@ export const COACH_MODEL = 'claude-sonnet-5-5'
 const MAX_TOKENS = 1024
 
 // Fixed text, no per-request values, so every request sends the same prefix. It is
-// below the model's minimum cacheable length, so it is not marked for caching.
+// cached (`coachSystem`): 1,197 tokens (counted 2026-11-18), over Sonnet 5.5's
+// 512-token minimum. Any byte changed here starts a new cache entry.
 export const COACH_SYSTEM = `You are Pip's table coach for a single-player, play-money Texas Hold'em game.
 The player asked the coach at the table. The message holds the game's own JSON description of the hand at that moment, built only from what the player can see. The player's own seat has the id "hero".
 
@@ -52,10 +53,13 @@ export function coachPrefs(body) {
 }
 
 // The fixed rules first, then the player's settings, so the notes shape the
-// answer but come after (and are told to yield to) the rules.
+// answer but come after (and are told to yield to) the rules. The cache mark is
+// on the rules alone, so every question shares one entry whatever its length or
+// notes: a question within 5 minutes of the last one reads the rules at a tenth
+// of the price, and the first after a pause writes them at 1.25 times.
 export function coachSystem({ style, notes }) {
   const blocks = [
-    { type: 'text', text: COACH_SYSTEM },
+    { type: 'text', text: COACH_SYSTEM, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: COACH_STYLES[style] },
   ]
   if (notes)
@@ -198,6 +202,8 @@ export function streamCoach(env, hand, prefs = coachPrefs(null), signal = null, 
     const outcome = {
       firstTextMs: null,
       inputTokens: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
       outputTokens: null,
       stop: null,
       solver: solverFor(latest) !== null,
@@ -216,7 +222,10 @@ export function streamCoach(env, hand, prefs = coachPrefs(null), signal = null, 
       }
       const message = await stream.finalMessage()
       outcome.stop = message.stop_reason
+      // input_tokens counts only what was neither read from nor written to the cache.
       outcome.inputTokens = message.usage.input_tokens
+      outcome.cacheReadTokens = message.usage.cache_read_input_tokens ?? 0
+      outcome.cacheWriteTokens = message.usage.cache_creation_input_tokens ?? 0
       outcome.outputTokens = message.usage.output_tokens
       if (message.stop_reason === 'refusal')
         await send({
