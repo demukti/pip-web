@@ -91,12 +91,83 @@ writing the cache costs 1.25 times the input on every first question to save abo
 
 **What the model sees.** Fixed rules (`COACH_SYSTEM`): the answer's shape; no advice
 when it is not the hero's turn or the run is over; the description's own equity, pot
-odds and hand name rather than its own arithmetic; legal actions only; reads only when
-present; never a guessed card; chips without a currency sign. Then the player's
+odds and hand name rather than its own arithmetic; the opening chart's play or the shove
+chart's for a first move before the flop ([The opening chart](#the-opening-chart)); legal
+actions only; reads only when present; never a guessed card; chips without a currency
+sign. Then the player's
 length, then the player's notes, told to yield to the rules. The user message is
-`{ hand }`, exactly as the game sent it. The rules end with how to answer a
+`{ hand }`, exactly as the game sent it, with `solver` beside it when the chart answers
+the spot and `shown` when the service has already written the advice line. The rules end with how to answer a
 follow-up: the question itself, in plain words, no advice line unless asked what to
 do, within the length's sentences.
+
+## The opening chart
+
+Folded round to you before the flop, the coach is handed a chart's answer for your exact
+seat, stack and hand, so the advice is a known baseline and not what the model
+remembers. Added 2026-11-18. It covers that one decision (about half of all first
+preflop decisions, by a count over 2,400 simulated hands at six venues); every other
+spot is still the model's judgment on the game's own equity and pot odds.
+
+**It is a baseline, not a way to beat Pip.** The chart says what holds up against
+anybody. Nothing in it is tuned to how Pip's own opponents play, on purpose: advice bent
+to one pool of players stops being true at the next table. Adjusting to opponents is
+the coach's job, out loud, from the reads the table shows ("the standard play is a
+raise; these two call everything, so with a hand this close, folding is fine").
+
+**Two charts, by stack.** The game names the spot in `hero.firstIn`
+(`firstInFacts` in `hand.ts`): the chart seat (by players behind, the engine's
+`firstInSpot`), the stack in big blinds against the biggest behind, and the hand class.
+
+- **Fifteen big blinds or fewer:** the game adds `shoveChart`, from the shove chart Pip
+  already teaches (`lib/drills/shoveRange`): shove, fold or close, and what shoving is
+  worth.
+- **Above fifteen:** the service looks the spot up in Pip's opening chart
+  (`live-state/chart.mjs`, read by `live-state/solver.mjs`) and sends the model a `solver`
+  entry beside the hand. No entry heads-up (the small blind is the button there, a
+  different game), and with more than five players behind the entry says to play
+  tighter than the six-handed chart.
+
+**What the chart holds.** For five seats at ten stack steps (20 to 100 big blinds; the
+nearest answers), one answer a hand: the play (raise, shove, limp from the small blind,
+or fold), another play worth the same if there is one, the best of the rest, and how
+much better the play is than that, as one of six sizes. The coach is given words, never
+decimals: "folding gives up about a quarter of a big blind". A hand with nothing clearly
+worse is **close**.
+
+**How it was built** (`pnpm coach-chart`, `scripts/coach-chart.ts`): from published
+six-handed solver ranges and Pip's own shove solver, and it is neither of them.
+
+- Values are read between the solved depths, so the steps are Pip's own.
+- Shoving is an option the published ranges never consider. Up to 30 big blinds Pip's
+  solver prices it against equilibrium callers, and it is the play where it beats
+  everything else by a tenth of a big blind (a quarter from the small blind). At 20 big
+  blinds that is the button's small pairs and a few suited broadways, and most aces
+  and pairs from the small blind.
+- Two plays within a twentieth of a big blind are the same choice.
+- At the deep steps a second, independent solver is asked whether it opens the hand; a
+  disagreement would make the hand close. There are none: every hand the two disagree
+  on was already close.
+- The raise size is the house's: 2 big blinds up to the 35 step and 2.5 above, and half
+  a big blind more from the small blind.
+
+The source ranges sit in `private/sets/` on the machine that builds the chart, which git
+ignores. A clone does not need them: the chart is checked in.
+
+**Who decides, and the instant advice line.** Where the play is clearly the standard one,
+the chart decides: the service sends the advice line itself ("Raise to 25.", `leadFor`)
+before the model has been asked, and tells the model it is already `shown`, so the model
+writes only the reason. Where the hand is close, the model decides and writes the line
+as usual. The same goes for the shove chart's shove and fold. On a follow-up the
+service never writes a line. The entry also carries the **pattern** ("the weakest
+offsuit king the CO plays at this depth is KTo; K9o is first played from the BTN"), so
+an answer teaches a rule and not one hand.
+
+**What it costs an answer.** Nothing: the chart is 40 KB inside the Worker, a lookup is
+under a tenth of a millisecond, and no storage is read. In a clear spot the first words
+no longer wait for the model at all. The question grows by about 400 tokens (the rules
+by about 290, the entry by about 95; measured in characters, 2026-11-18). `ask_coach_answer` logs `solver` (the hand went
+with an entry) and `lead` (the service wrote the advice line).
 
 ## The player's settings
 
@@ -285,8 +356,8 @@ git fetch upstream --tags
 ```
 
 The coach's own files (`live-state/`, `src/lib/askCoach/`, `AskCoach.tsx`,
-`AskCoachSection.tsx`, `tests/askCoach*.test.ts`, `deploy-pip-tutor.yaml`, this doc and
-`docs/archive/`) do not exist upstream. A merge can conflict only here:
+`AskCoachSection.tsx`, `tests/askCoach*.test.ts`, `scripts/coach-chart.ts`,
+`deploy-pip-tutor.yaml`, this doc and `docs/archive/`) do not exist upstream. A merge can conflict only here:
 
 | File | Change |
 | --- | --- |
@@ -297,14 +368,16 @@ The coach's own files (`live-state/`, `src/lib/askCoach/`, `AskCoach.tsx`,
 | `src/store/game.ts` | `buildHandRecord` reveals by `showsHoleCards` (no coach code) |
 | `src/lib/poker/engine.ts`, `tests/engine.test.ts`, `tests/spectate.test.ts` | `showsHoleCards`, its tests, and the spectate test's matching regex |
 | `.github/workflows/deploy-cloudflare-pages.yaml` | Gated to `playpip/pip-web` |
-| `package.json`, `pnpm-lock.yaml` | `@anthropic-ai/sdk` |
+| `package.json`, `pnpm-lock.yaml` | `@anthropic-ai/sdk`; the `coach-chart` script |
+| `.gitignore` | `/private/` (source ranges for the chart) |
 | `knip.json` | `live-state/worker.mjs` entry |
 | `.env.example` | `NEXT_PUBLIC_ASK_COACH_URL` |
 
 The coach also reads upstream code it does not change: `table.ts` reads the game store
 (`hand`, `handIndex`, `heroEquity`, `venue`, `seats`, `seatStats`, `status`, `place`,
 `blindLevel`), `useProfile().castRecords` and `deriveReads`; `hand.ts` uses
-`evaluateHand`, `handPhrase` and `ordinal`. The type check catches a renamed field.
+`evaluateHand`, `handPhrase` and `ordinal`, and for the first-in spot `firstInSpot`,
+`holeKey` and the shove chart's `nashFor`, `shoveEv` and `classOf`. The type check catches a renamed field.
 `tests/askCoachHooks.test.ts` fails the gate if a merge drops the `AppBoot` wiring, the
 table or Settings mounts, puts coach code into the game store, or changes how
 `PlayerDialog` derives reads. It reads source, so after a merge still ask the coach once.
@@ -326,4 +399,5 @@ who pays (docs/membership.md already lists coaching among what the membership se
 | By hand, 2026-11-16, deployed Worker `24a1dce0` | Local game: the owner signed in once in Settings (`/connect` 200 in 149 ms; the browser keeps only the URL and the token). Two Teach me answers preflop: the service streamed after 37–40 ms, first words at 0.64–0.78 s, done at 2.8 s, 1,350 tokens in and 210–226 out, both log lines each. A refused token (a placeholder) signed the browser out, hid the button and said so in the card |
 | By hand, 2026-11-16 (ChatGPT-era protocol, same model code) | Answers streaming into the card (first words 0.7–1.1 s, done 1.3–2.7 s from the click), Standard at three sentences, Short shorter, ✕ stopping the model call (`coach_closed` at 933 ms), the card over the result banner at showdown |
 | By hand, 2026-11-16, follow-ups | Local game against a local stand-in for `/coach` (no model calls), Chromium at 375×812 and at desktop width. Reply opened the sheet full screen on the phone size with the hand pinned (J♣ 3♣, pot 3, to call 2) and the box inside the screen at 16px, not focused; a typed follow-up sent with Enter and a quick question from the ? menu both streamed in. The stand-in received the conversation growing by one turn each time, the hand never sent again (unchanged). Esc went back to the card, which showed the latest follow-up with "Conversation" and no ↻; a second Esc closed it and the bulb brought it back without asking. At desktop width the sheet is a 448×640 panel with the box focused, and reopening it lands at the conversation's end |
-| Unverified | The notes as the model applies them (Teach me ran to seven sentences once, one over its six), a refused API key, the rate limit as the player sees it, the bulb on a real phone (touch); follow-ups against the real model, the sheet on a real iPhone with the keyboard and dictation open (the visual-viewport sizing), and the sheet in Firefox and Safari |
+| Automated, 2026-11-18, the opening chart | 95 pass with the 16 added. `askCoachSolver` (11): the chart whole and well-formed (letters, limps only from the small blind, no shove above 30 big blinds, close meaning nothing clearly worse); it reads like poker (later seats play more, aces a raise, seven-deuce a fold, small pairs shoved short and raised deep); the play, the size in words and the pattern for a clear raise, a clear fold, a close hand, the small blind's limp-or-raise and a shove; no decimal reaching the coach; the house raise made legal; no entry heads-up, on a short stack, off the hero's turn or for an unreadable spot; the advice line for clear plays only and only as a legal action, from both charts; `solver` and `shown` in the message. `askCoach` (2 more): the real Worker sending the advice line first and the model's reason after it, logging `solver` and `lead`, a follow-up and any other hand going as before; a close spot left to the model. `askCoachHand` (3 more): `hero.firstIn` deep, short (against `shoveEv` itself) and null everywhere else |
+| Unverified | The opening chart against the real model and the deployed Worker: that the explanation agrees with a line it did not write, that it does not repeat it, and how a close hand is argued. The notes as the model applies them (Teach me ran to seven sentences once, one over its six), a refused API key, the rate limit as the player sees it, the bulb on a real phone (touch); follow-ups against the real model, the sheet on a real iPhone with the keyboard and dictation open (the visual-viewport sizing), and the sheet in Firefox and Safari |

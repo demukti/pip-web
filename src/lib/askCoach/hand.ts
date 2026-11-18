@@ -1,6 +1,16 @@
 // The hand as the coach sees it: an explicit, hero-visible projection of
 // the engine, built when the player asks. Never serialize HandState directly: it
 // contains the undealt deck and every opponent's private cards.
+import { holeKey } from '@/config/handNames'
+import {
+  MAX_STACK,
+  MIN_STACK,
+  type ShoveSeat,
+  classOf,
+  nashFor,
+  shoveEv,
+} from '@/lib/drills/shoveRange'
+import { firstInSpot } from '@/lib/poker/ai/pushFold'
 import { cardToString } from '@/lib/poker/cards'
 import {
   isHandComplete,
@@ -85,6 +95,58 @@ function heroMadeHand(hand: HandState, hero: HandState['players'][number] | unde
   }
 }
 
+/** The chart seat for a first move, by how many players are left to act behind it. */
+const CHART_SEAT: Record<number, ShoveSeat> = { 1: 'sb', 2: 'btn', 3: 'co', 4: 'mp', 5: 'utg' }
+
+const hundredths = (value: number) => Math.round(value * 100) / 100
+
+/**
+ * The hero's first move when it folds round to them before the flop: the spot
+ * as a preflop chart names it, so the coach can be given a chart's answer
+ * instead of working one out. Null in every other spot.
+ *
+ * `seat` is the six-handed seat with as many players behind (the engine's own
+ * rule, `firstInSpot`), which is not always the seat's name at a shorter or
+ * longer table. `stackBb` is the hero's stack against the biggest behind.
+ *
+ * `shoveChart` answers a stack of fifteen big blinds or fewer from the shove
+ * chart the game teaches and its short-stacked opponents play
+ * (lib/drills/shoveRange): what shoving is worth over folding against the
+ * equilibrium callers, and `close` when that is inside the chart's own
+ * sampling margin. Above fifteen it is null, and the service adds a solver's
+ * opening chart for the spot (live-state/solver.mjs).
+ */
+function firstInFacts(hand: HandState, hero: HandState['players'][number]) {
+  const spot = firstInSpot(hand, hero.id)
+  const handClass = holeKey(hero.hole)
+  if (!spot || !handClass) return null
+  const seat = CHART_SEAT[Math.min(spot.behind, 5)]
+  let shoveChart: {
+    stackBb: number
+    verdict: 'shove' | 'fold' | 'close'
+    shoveValueBb: number
+    marginBb: number
+  } | null = null
+  if (spot.effectiveBb <= MAX_STACK) {
+    const stack = Math.max(MIN_STACK, Math.round(spot.effectiveBb))
+    const value = shoveEv(classOf(hero.hole), { seat, stack }, nashFor({ seat, stack }).call)
+    shoveChart = {
+      stackBb: stack,
+      verdict: Math.abs(value.ev) <= value.band ? 'close' : value.ev > 0 ? 'shove' : 'fold',
+      shoveValueBb: hundredths(value.ev),
+      marginBb: hundredths(value.band),
+    }
+  }
+  return {
+    seat,
+    playersBehind: spot.behind,
+    playersDealt: hand.players.filter((player) => player.hole.length > 0).length,
+    stackBb: Math.round(spot.effectiveBb * 10) / 10,
+    handClass,
+    shoveChart,
+  }
+}
+
 function positions(hand: HandState): Map<string, string> {
   // Include folded/all-in players: positions belong to the original deal.
   const dealt = hand.players.filter((player) => player.hole.length > 0)
@@ -133,6 +195,7 @@ export function describeHand(hand: HandState | null, context: HandContext) {
   // Price to call only on the hero's own turn: the engine's call amount,
   // already capped at the hero's stack.
   const toCall = hero && legal && actor === hero.id ? legal.callAmount : null
+  const firstIn = hero && actor === hero.id ? firstInFacts(hand, hero) : null
   const potOdds = toCall !== null && toCall > 0 ? toCall / (pot + toCall) : null
   const blindPosts = hand.players.flatMap((player) => {
     const position = seatPositions.get(player.id)
@@ -174,6 +237,8 @@ export function describeHand(hand: HandState | null, context: HandContext) {
           stack: hero.stack,
           toCall,
           potOdds,
+          // Folded round to the hero before the flop: the spot a chart answers.
+          firstIn,
         }
       : null,
     communityCards: hand.community.map(cardToString),

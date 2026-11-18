@@ -34,6 +34,7 @@
     "rating-calibrate": "tsx scripts/rating-calibrate.ts",
     "play-it-out-cost": "tsx scripts/play-it-out-cost.ts",
     "shove-chart": "tsx scripts/shove-chart.ts",
+    "coach-chart": "tsx scripts/coach-chart.ts",
     "odds-band-coverage": "tsx scripts/odds-band-coverage.ts",
     "blackjack-edge": "tsx scripts/blackjack-edge.ts",
     "solitaire-targets": "tsx scripts/solitaire-targets.ts",

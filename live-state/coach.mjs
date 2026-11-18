@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { leadFor, solverFor } from './solver.mjs'
 
 // On-demand table coaching: the player asks the coach, the game sends the hand
 // as it stands, and the Worker streams one Claude answer back. One model pass, no
@@ -24,6 +25,9 @@ Rules:
 - If hand.table.status is busted, won, scored or watching, the run is over: say so instead of advising.
 - If the hand is complete, explain how it ended using hand.result; opponents' cards only from hand.result.shownHands.
 - Use the snapshot's numbers: hero.equity against hero.potOdds decides calls; hero.handName names the made hand; never re-derive either.
+- First move before the flop, folded round to the hero: when the message has a "solver" entry beside the hand, it is Pip's opening chart for this exact seat, stack and hand: the standard play against anybody. When solver.close is false, that play is the advice (a raise is to solver.raiseToChips; a limp is a call; a shove is a raise to availableActions.maxRaiseTo). Explain it with solver.verdict and solver.pattern, so the player learns the rule and not only this hand. You may add what a read on the players behind changes, but never reverse the advice. When solver.close is true, you decide: say what is standard, then let the reads on the players behind and the stacks choose, and say why.
+- A short stack's first move: when hero.firstIn.shoveChart is present, it is the shove-or-fold chart's answer. Advise its verdict: shove (a raise to availableActions.maxRaiseTo), fold, or close (either is fine; you decide as above). shoveValueBb is what shoving wins over folding, in big blinds.
+- When the message has "shown", that advice line is already on the player's screen as line 1. Do not write an advice line: write only the explanation, and agree with it.
 - Advise only legal actions from availableActions. Bet and raise sizes are the total street commitment; a call amount is the extra chips.
 - Use an opponent's style and reads only if present; with empty reads there is no read yet. Never guess opponent cards.
 - Chips only: bare numbers, never a currency sign.
@@ -61,8 +65,17 @@ export function coachSystem({ style, notes }) {
   return blocks
 }
 
-// What the model sees: the hand, exactly as the game described it.
-export const coachInput = (hand) => JSON.stringify({ hand })
+/**
+ * What the model sees: the hand, exactly as the game described it; beside it
+ * the opening chart's answer when it has one for the spot (./solver.mjs); and
+ * the advice line when the service has already shown it.
+ * @param {unknown} hand
+ * @param {string | null} [shown]
+ */
+export function coachInput(hand, shown = null) {
+  const solver = solverFor(hand)
+  return JSON.stringify({ hand, ...(solver ? { solver } : {}), ...(shown ? { shown } : {}) })
+}
 
 // Follow-ups on one hand: how many, and how long each part may be. The game
 // keeps the conversation and sends it whole with each one; the service keeps
@@ -94,9 +107,15 @@ export function coachThread(thread) {
   return turns
 }
 
-/** The hand first; then each answer and the follow-up put after it. */
-export function coachMessages(hand, thread = []) {
-  const messages = [{ role: 'user', content: coachInput(hand) }]
+/**
+ * The hand first; then each answer and the follow-up put after it. `shown` is
+ * the advice line already on the player's screen, on a first question only.
+ * @param {unknown} hand
+ * @param {{ answer: string, question: string, hand?: unknown }[]} [thread]
+ * @param {string | null} [shown]
+ */
+export function coachMessages(hand, thread = [], shown = null) {
+  const messages = [{ role: 'user', content: coachInput(hand, shown) }]
   for (const turn of thread) {
     messages.push({ role: 'assistant', content: turn.answer })
     messages.push({
@@ -135,6 +154,10 @@ const line = (value) => `${JSON.stringify(value)}\n`
  * Returns the body and a promise that settles, with timings, token counts and
  * any failure's class name, once the answer ends: hand it to `waitUntil`.
  * `signal` is the incoming request's, which aborts when the client disconnects.
+ *
+ * On a first question in a spot the chart decides, the advice line is sent at
+ * once, before the model is asked (`leadFor`), and the model writes only the
+ * explanation.
  */
 export function streamCoach(env, hand, prefs = coachPrefs(null), signal = null, thread = []) {
   const client = new Anthropic({
@@ -149,12 +172,13 @@ export function streamCoach(env, hand, prefs = coachPrefs(null), signal = null, 
   const { readable, writable } = new TransformStream()
   const writer = writable.getWriter()
   const send = (value) => writer.write(encoder.encode(line(value)))
+  const lead = thread.length === 0 ? leadFor(hand) : null
   const stream = client.beta.messages.stream({
     model: COACH_MODEL,
     max_tokens: MAX_TOKENS,
     output_config: { effort: 'low' },
     system: coachSystem(prefs),
-    messages: coachMessages(hand, thread),
+    messages: coachMessages(hand, thread, lead),
     // A safety decline is re-run on the model the API picks for its category.
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
@@ -167,8 +191,22 @@ export function streamCoach(env, hand, prefs = coachPrefs(null), signal = null, 
   writer.closed.catch(() => stream.abort())
   signal?.addEventListener('abort', () => stream.abort(), { once: true })
   const finished = (async () => {
-    const outcome = { firstTextMs: null, inputTokens: null, outputTokens: null, stop: null }
+    // Whether the hand as it now stands went with the chart's answer, and
+    // whether the service showed the advice line itself.
+    const latest = thread.findLast((turn) => turn.hand !== undefined)?.hand ?? hand
+    const outcome = {
+      firstTextMs: null,
+      inputTokens: null,
+      outputTokens: null,
+      stop: null,
+      solver: solverFor(latest) !== null,
+      lead: lead !== null,
+    }
     try {
+      if (lead) {
+        outcome.firstTextMs = Date.now() - start
+        await send({ type: 'text', text: `${lead}\n` })
+      }
       for await (const event of stream) {
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
           outcome.firstTextMs ??= Date.now() - start

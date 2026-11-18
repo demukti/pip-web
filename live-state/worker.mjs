@@ -71,6 +71,8 @@ async function coach(request, env, ctx, trace) {
           inputTokens: outcome.inputTokens,
           outputTokens: outcome.outputTokens,
           stop: outcome.stop,
+          solver: outcome.solver,
+          lead: outcome.lead,
           code: outcome.code,
           error: outcome.error ? errorClass(outcome.error) : undefined,
         }),

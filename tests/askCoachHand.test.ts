@@ -1,5 +1,7 @@
 import test from 'ava'
 import { describeHand, type TableContext } from '@/lib/askCoach/hand'
+import { holeKey } from '@/config/handNames'
+import { classOf, nashFor, shoveEv } from '@/lib/drills/shoveRange'
 import { mulberry32, cardToString } from '@/lib/poker/cards'
 import { evaluateHand, handPhrase } from '@/lib/poker/handEval'
 import {
@@ -296,6 +298,84 @@ test('action history names each actor and their position', (t) => {
       position: 'SB',
     },
   ])
+})
+
+const dealDeep = (stacks: [number, number, number]) =>
+  startHand({
+    seats: [
+      { id: 'hero', name: 'Hero', stack: stacks[0] },
+      { id: 'ai1', name: 'One', stack: stacks[1] },
+      { id: 'ai2', name: 'Two', stack: stacks[2] },
+    ],
+    buttonIndex: 0,
+    smallBlind: 5,
+    bigBlind: 10,
+    rng: mulberry32(42),
+  })
+
+test('hero.firstIn: folded round to the hero, the spot as a chart names it', (t) => {
+  // Three-handed on the button: two players behind, 150 big blinds against the biggest.
+  const hand = dealDeep([2000, 1500, 1000])
+  const firstIn = describeHand(hand, context)!.hero?.firstIn
+  t.deepEqual(firstIn, {
+    seat: 'btn',
+    playersBehind: 2,
+    playersDealt: 3,
+    stackBb: 150,
+    handClass: holeKey(hand.players[0].hole),
+    // Deep: the service's solved chart answers, not the shove chart.
+    shoveChart: null,
+  })
+  t.regex(firstIn?.handClass ?? '', /^[AKQJT2-9]{2}[so]?$/)
+})
+
+test('hero.firstIn: a short stack carries the shove chart’s own answer', (t) => {
+  const hand = deal() // 200 against 150 at a big blind of 10: fifteen big blinds
+  const hole = hand.players[0].hole
+  const firstIn = describeHand(hand, context)!.hero?.firstIn
+  const value = shoveEv(
+    classOf(hole),
+    { seat: 'btn', stack: 15 },
+    nashFor({ seat: 'btn', stack: 15 }).call,
+  )
+  t.like(firstIn, { seat: 'btn', stackBb: 15, handClass: holeKey(hole) })
+  t.deepEqual(firstIn?.shoveChart, {
+    stackBb: 15,
+    verdict: Math.abs(value.ev) <= value.band ? 'close' : value.ev > 0 ? 'shove' : 'fold',
+    shoveValueBb: Math.round(value.ev * 100) / 100,
+    marginBb: Math.round(value.band * 100) / 100,
+  })
+  // A stack under the chart's three big blinds is read at three.
+  const tiny = describeHand(dealDeep([25, 1500, 1000]), context)!.hero?.firstIn
+  t.like(tiny, { stackBb: 2.5, shoveChart: { stackBb: 3 } })
+})
+
+test('hero.firstIn: null once anybody has come in, off the hero’s turn, and after the flop', (t) => {
+  let hand = dealDeep([2000, 1500, 1000])
+  hand = applyAction(hand, { type: 'call' }) // the hero limps the button
+  t.is(describeHand(hand, context)!.hero?.firstIn, null) // the small blind to act
+  hand = applyAction(hand, { type: 'call' })
+  hand = applyAction(hand, { type: 'check' })
+  t.is(hand.street, 'flop')
+  for (; hand.players[hand.toActIndex].id !== 'hero'; hand = applyAction(hand, { type: 'check' }));
+  t.is(describeHand(hand, context)!.hero?.firstIn, null)
+
+  // In the big blind with a raise in front: facing a bet, not first in.
+  let raised = startHand({
+    seats: [
+      { id: 'ai1', name: 'One', stack: 1500 },
+      { id: 'ai2', name: 'Two', stack: 1000 },
+      { id: 'hero', name: 'Hero', stack: 2000 },
+    ],
+    buttonIndex: 0,
+    smallBlind: 5,
+    bigBlind: 10,
+    rng: mulberry32(42),
+  })
+  raised = applyAction(raised, { type: 'raise', amount: 25 })
+  raised = applyAction(raised, { type: 'fold' })
+  t.is(raised.players[raised.toActIndex].id, 'hero')
+  t.is(describeHand(raised, { ...context })!.hero?.firstIn, null)
 })
 
 test('brief: preflop on the hero turn', (t) => {

@@ -51,3 +51,6 @@ next-env.d.ts
 
 # the rooms Worker's local secrets (see rooms/.dev.vars.example)
 .dev.vars
+
+# Source material for generated charts (scripts/coach-chart.ts): never committed.
+/private/

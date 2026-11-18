@@ -56,6 +56,8 @@ const ALLOWED_ANSWER_LOG = [
   'inputTokens',
   'outputTokens',
   'stop',
+  'solver',
+  'lead',
   'code',
   'error',
 ]
@@ -307,6 +309,97 @@ test.serial('a browser signs in with the owner key and keeps only its own token'
   // Each sign-in is its own browser.
   t.not(await token(fetcher), issued)
 })
+
+// ---------------------------------------------------------------------------
+// The opening chart: the advice line at once, and the chart's answer for the model.
+
+/** Aces on the button, folded to the hero, as the game describes the spot. */
+const FIRST_IN = {
+  street: 'preflop',
+  bigBlind: 10,
+  currentPlayerToAct: 'hero',
+  hero: {
+    playerId: 'hero',
+    holeCards: ['As', 'Ah'],
+    firstIn: {
+      seat: 'btn',
+      playersBehind: 2,
+      playersDealt: 6,
+      stackBb: 100,
+      handClass: 'AA',
+      shoveChart: null,
+    },
+  },
+  availableActions: {
+    playerId: 'hero',
+    canFold: true,
+    canRaise: true,
+    minRaiseTo: 20,
+    maxRaiseTo: 1000,
+  },
+}
+
+test.serial(
+  'a clear first-in spot: the advice line comes from the service, the reason from the model',
+  async (t) => {
+    const calls = standIn(t, () => streamed(answerEvents(['Aces are the best hand.'])))
+    const { fetcher } = fixture()
+    const bearer = await token(fetcher)
+    const before = logs('ask_coach_answer').length
+
+    // The line is the first thing sent, and the model is told it is on screen.
+    t.deepEqual(await lines(await ask(fetcher, bearer, { hand: FIRST_IN })), [
+      { type: 'text', text: 'Raise to 25.\n' },
+      { type: 'text', text: 'Aces are the best hand.' },
+      { type: 'done' },
+    ])
+    const sent = JSON.parse(calls[0].body.messages[0].content)
+    t.deepEqual(sent.hand, FIRST_IN)
+    t.like(sent.solver, { seat: 'BTN', hand: 'AA', play: 'raise', close: false, raiseToChips: 25 })
+    t.is(sent.shown, 'Raise to 25.')
+    const first = await nextAnswerLog(before)
+    t.true(first?.solver && first?.lead)
+    t.true(Object.keys(first).every((name) => ALLOWED_ANSWER_LOG.includes(name)))
+
+    // A follow-up is the model's alone: no line from the service, nothing "shown".
+    const thread = [{ answer: 'Raise to 25.\nAces are the best hand.', question: 'How big?' }]
+    t.deepEqual(await lines(await ask(fetcher, bearer, { hand: FIRST_IN, thread })), [
+      { type: 'text', text: 'Aces are the best hand.' },
+      { type: 'done' },
+    ])
+    t.false('shown' in JSON.parse(calls[1].body.messages[0].content))
+    t.false((await nextAnswerLog(before + 1))?.lead)
+
+    // Any other hand goes exactly as it always did.
+    await lines(await ask(fetcher, bearer))
+    t.deepEqual(JSON.parse(calls[2].body.messages[0].content), { hand: HAND })
+    const other = await nextAnswerLog(before + 2)
+    t.false(other?.solver || other?.lead)
+  },
+)
+
+test.serial(
+  'a close first-in spot is the model’s to call: the chart beside it, no line shown',
+  async (t) => {
+    const calls = standIn(t, () => streamed(answerEvents(['Fold.\n', 'It is close.'])))
+    const { fetcher } = fixture()
+    const close = {
+      ...FIRST_IN,
+      hero: {
+        ...FIRST_IN.hero,
+        firstIn: { ...FIRST_IN.hero.firstIn, seat: 'utg', handClass: 'KJo' },
+      },
+    }
+    t.deepEqual(await lines(await ask(fetcher, await token(fetcher), { hand: close })), [
+      { type: 'text', text: 'Fold.\n' },
+      { type: 'text', text: 'It is close.' },
+      { type: 'done' },
+    ])
+    const sent = JSON.parse(calls[0].body.messages[0].content)
+    t.true(sent.solver.close)
+    t.false('shown' in sent)
+  },
+)
 
 test.serial('a service without a proper owner key turns everything away', async (t) => {
   const { fetcher } = fixture({ OWNER_KEY: 'too-short' })
