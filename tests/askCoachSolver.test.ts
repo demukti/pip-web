@@ -323,7 +323,7 @@ test('one raise in front: the play, the pattern and a legal re-raise', (t) => {
   t.is(leadFor(facing('bb', 'utg', 'AA')), 'Raise to 100.')
   // A call is the price the table quotes.
   const call = hands.find(
-    (h, at) => vsOpen.bb_vs_btn.best[at] === 'C' && vsOpen.bb_vs_btn.also[at] === '-',
+    (_, at) => vsOpen.bb_vs_btn.best[at] === 'C' && vsOpen.bb_vs_btn.also[at] === '-',
   )
   t.truthy(call)
   t.is(leadFor(facing('bb', 'btn', call ?? '')), 'Call 15.')
@@ -338,6 +338,16 @@ test('one raise in front: the play, the pattern and a legal re-raise', (t) => {
 test('the charts are solved deep: a shorter stack is told so, a short one gets nothing', (t) => {
   const at40 = solverFor(facing('bb', 'btn', '72o', { stackBb: 40 }))
   t.regex(at40?.note ?? '', /Solved at 100 big blinds, and this is 40/)
+  // There the chart's play is a starting point, never the advice: a hand it
+  // re-raises as a bluff when deep is not one to re-raise with a third of the stack.
+  const light = solverFor(facing('btn', 'mp', '65s', { stackBb: 31 }))
+  t.true(light?.close)
+  t.regex(
+    light?.verdict ?? '',
+    /^At 100 big blinds the standard play is to .+\. At 31 that is a starting point/,
+  )
+  t.regex(light?.note ?? '', /re-raise only a hand you would be glad to get all in with/)
+  t.is(leadFor(facing('btn', 'mp', '65s', { stackBb: 31 })), null)
   t.is(leadFor(facing('bb', 'btn', '72o', { stackBb: 40 })), null)
   t.false('note' in (solverFor(facing('bb', 'btn', '72o', { stackBb: 60 })) ?? {}))
   t.is(solverFor(facing('bb', 'btn', '72o', { stackBb: 24 })), null)
@@ -370,4 +380,28 @@ test('heads-up: the small blind’s first move, and the big blind against a rais
   t.is(leadFor(limped), null)
   const aces = facing('bb', 'sb', 'AA', { playersDealt: 2, kind: 'limp', raiseToBb: null })
   t.like(solverFor(aces), { play: 'raise', raiseToChips: 40 })
+})
+
+test('the entry says who acts last after the flop, so the model never has to work it out', (t) => {
+  const position = (hero: string, opener: string, more: object = {}) =>
+    solverFor(facing(hero, opener, 'AA', more))?.position
+  // In a seat after the raiser's, short of the blinds: position.
+  t.is(position('co', 'mp'), 'After the flop you act after the raiser. You have position on them.')
+  t.regex(position('btn', 'utg') ?? '', /You have position on them/)
+  // The blinds act first after the flop, whoever raised.
+  t.is(position('bb', 'btn'), 'After the flop you act before the raiser. You are out of position.')
+  t.regex(position('sb', 'co') ?? '', /You are out of position/)
+  // Except the big blind against the small blind, who acts before it.
+  t.regex(position('bb', 'sb') ?? '', /You have position on them/)
+  // Heads-up the small blind is the button: the big blind acts first, even after a limp.
+  t.regex(position('bb', 'sb', { playersDealt: 2 }) ?? '', /you act first.*out of position/)
+  t.regex(
+    position('bb', 'sb', { playersDealt: 2, kind: 'limp', raiseToBb: null }) ?? '',
+    /you act first/,
+  )
+  const open = withSpot(spot('sb', 80, 'AA'), { playersDealt: 2, playersBehind: 1 })
+  t.regex(solverFor(open)?.position ?? '', /you act last.*You have position/)
+  // The opening chart has several players behind and says nothing about it.
+  t.false('position' in (solverFor(spot('co', 100, 'AA')) ?? {}))
+  t.regex(COACH_SYSTEM, /solver\.position/)
 })

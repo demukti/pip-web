@@ -113,6 +113,7 @@ function pattern(chart, node, step, seat, hand) {
  * @property {string} verdict
  * @property {number} [raiseToChips]
  * @property {string} pattern
+ * @property {string} [position]
  * @property {string} [note]
  */
 
@@ -158,6 +159,27 @@ export function solverFor(hand, chart = CHART) {
       )
 }
 
+/** The order seats act in after the flop: the blinds first, the button last. */
+const AFTER_THE_FLOP = ['sb', 'bb', 'utg', 'mp', 'co', 'btn']
+
+/**
+ * Who acts last after the flop, in a spot with one opponent in: a fact the
+ * model otherwise works out from seat names, and has got wrong. Heads-up the
+ * small blind is the button, so it acts last there.
+ */
+function positionOf(spot) {
+  if (spot.playersDealt === 2)
+    return spot.seat === 'sb'
+      ? 'After the flop you act last: heads-up the small blind is the button. You have position.'
+      : 'After the flop you act first: heads-up the small blind is the button. You are out of position.'
+  const mine = AFTER_THE_FLOP.indexOf(spot.seat)
+  const theirs = AFTER_THE_FLOP.indexOf(spot.opener)
+  if (mine < 0 || theirs < 0) return null
+  return mine > theirs
+    ? 'After the flop you act after the raiser. You have position on them.'
+    : 'After the flop you act before the raiser. You are out of position.'
+}
+
 /** The reply to a raise is bigger out of position: three times the raise, four from the blinds. */
 const reRaise = (spot) => (spot.seat === 'sb' || spot.seat === 'bb' ? 4 : 3) * spot.raiseToBb
 
@@ -187,6 +209,7 @@ function often(hand, chart, node, spot, where) {
   const facingRaise = spot.kind === 'raise'
   const say = (play) => (facingRaise && play === 'raise' ? 're-raise' : play)
   const both = also ? `${say(best)} or ${say(also)}` : say(best)
+  const loose = spot.stackBb < SOLVED_DEEP
 
   // The weakest hand of this shape that does anything but fold (or check).
   const { name, hands } = family(spot.handClass)
@@ -203,10 +226,14 @@ function often(hand, chart, node, spot, where) {
     hand: spot.handClass,
     play: say(best),
     ...(also ? { asGood: say(also) } : {}),
-    close: Boolean(also),
-    verdict: also
-      ? `Close: ${both}; the solver does both. Reads may decide it.`
-      : `${both[0].toUpperCase()}${both.slice(1)}.`,
+    // Under the depth it was solved for, the chart's play is where to start
+    // from and never the answer: the model decides.
+    close: Boolean(also) || loose,
+    verdict: loose
+      ? `At 100 big blinds the standard play is to ${both}. At ${Math.round(spot.stackBb)} that is a starting point, not the answer.`
+      : also
+        ? `Close: ${both}; the solver does both. Reads may decide it.`
+        : `${both[0].toUpperCase()}${both.slice(1)}.`,
     pattern: weakest
       ? `The weakest ${name} the ${seat} ${doing} here is ${weakest}.`
       : `The ${seat} ${doing} no ${name} here.`,
@@ -216,8 +243,10 @@ function often(hand, chart, node, spot, where) {
     const chips = legalRaise(hand, size)
     if (chips) entry.raiseToChips = chips
   }
-  if (spot.stackBb < SOLVED_DEEP)
-    entry.note = `Solved at 100 big blinds, and this is ${Math.round(spot.stackBb)}: calls with small pairs and suited connectors are worth less here, and a re-raise is close to all-in.`
+  const position = positionOf(spot)
+  if (position) entry.position = position
+  if (loose)
+    entry.note = `Solved at 100 big blinds, and this is ${Math.round(spot.stackBb)}: calls with small pairs and suited connectors are worth less here, and a re-raise is close to all-in, so re-raise only a hand you would be glad to get all in with. A hand the deep chart re-raises as a bluff is a call or a fold here.`
   return entry
 }
 
