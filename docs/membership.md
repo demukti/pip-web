@@ -115,7 +115,8 @@ room with its code needs a free account and nothing else** (Will, 2026-10-11). A
 should never be short of players because their friends have not paid, and every friend sat at a
 member's table sees what the membership is.
 
-**Anyone with a free account can open one live private room a day** (Will, 2026-10-23, cmo#220),
+**Anyone with a free account can open one live private room a UTC week, Monday to Sunday** (Will,
+2026-11-18, cmo#252; one a day from 2026-10-23, cmo#220),
 with regulars, and nothing at the table says who paid. **A room hosted without the membership has
 at most four seats and no camera or voice** (Will, 2026-11-02): since the free room shipped, taps
 on the multiplayer membership link went to zero, and bigger tables with faces and voices are the
@@ -132,7 +133,8 @@ host.
   only decides which buttons the hub shows.
 - **The free ones are counted on the room server too.** The decision is
   `hostingAllowance()` in `lib/multiplayer/freeRoom.ts`; the account's `Player` object keeps the
-  UTC day the free room and the free quick match were last spent. The room is claimed when it is
+  UTC day the free room and the free quick match were last spent; the room is free once a week
+  (Monday to Sunday, UTC, `spentThisWeek`), the quick match once a day. The room is claimed when it is
   created and handed back if creation fails; the quick match is claimed on joining the queue and
   handed back if they leave it unmatched. The slow game is counted from the same object's index
   of their slow games (the ones they host, lobby or playing). A table costs us money and seats
@@ -421,6 +423,12 @@ page that answers their question is the least we owe them for asking. If this ev
 into something that appears without being asked for, it has stopped being this and the rule
 above is what it has broken.
 
+**One exception, on the lobby** (cmo#252, 2026-11-18). After a player's third run, once their
+free report is used, `MembershipCard` shows their report's top finding and what the rest holds,
+with a button to the page and an × that puts it away for good on that device. It is the only
+thing that offers without being asked; it stays on the lobby, never over anything, never at a
+table, and never comes back once put away.
+
 **Nothing about buying appears in the game loop, bar one line once the run is over.**
 `tests/membershipSurfaces.test.ts` fails the build if anything under `src/components/table/`
 or `src/store/game.ts` links to `/membership`, imports `config/membership`, or calls
@@ -517,7 +525,7 @@ Worth listing, because each was considered:
 | `tests/reportTeaser.test.ts` | The end-of-run line saying something the report does not, or naming the wrong unit |
 | `tests/sitDown.test.ts` | A free table moving behind the membership; a member room paying better than a free one |
 | `tests/customTable.test.ts` | A built table being easier than the ladder at the same price; an invited guest not turning up |
-| `tests/spectate.test.ts` | The spectator view answering while a hand is live |
+| `tests/spectate.test.ts` | The spectator view answering while a hand is live; watching it out writing anything to the player's record |
 | `tests/challenge.test.ts` | Member content enlarging a free player's denominator |
 | `tests/roadmapDrills.test.ts` | The public roadmap going stale about which drills are paid, or dropping the daily free game |
 | `tests/rating.test.ts` | The ratings tables gaining a client write; the rating taking an impossible value |
@@ -563,7 +571,8 @@ event, at most once per tab:
 | Event | Sent when |
 |---|---|
 | `limit-card-seen-table` / `limit-card-tapped-table` | today's free member table is spent: the card on Side Tables shown / its button tapped |
-| `limit-card-seen-room` / `limit-card-tapped-room` | today's free private room is spent: the card on the hub shown / tapped |
+| `limit-card-seen-room` / `limit-card-tapped-room` | this week's free private room is spent: the card on the hub shown / tapped |
+| `report-offer-seen` / `report-offer-tapped` / `report-offer-dismissed` | the lobby's one ask (after three runs, the free report used): shown / its button tapped / put away |
 | `limit-card-seen-quick` / `limit-card-tapped-quick` | today's free quick match is spent: the card on the hub shown / tapped |
 | `host-card-seen` | a friend's guest without the membership reached the room's end screen |
 | `host-card-open-tapped` | they tapped "Open a room" on it |
@@ -599,8 +608,8 @@ Umami events here are names only, so the feature is in the name rather than in e
 
 They are counts, not grants: nothing reads them back. Stripe's dashboard stays the count of
 money. Where the funnel undercounts: a blocked Umami tag reports nothing, a player who pays in
-one tab and comes back in another is a new tab, and a webhook slower than ~15 seconds means
-`membership-active` never fires for that player even though the membership is real. Adding or
+one tab and comes back in another is a new tab, and a webhook slower than ~2 minutes 15 seconds
+(~15 seconds in the store app) means `membership-active` never fires for that player even though the membership is real. Adding or
 renaming one is a `/privacy` change too (`tests/analyticsClaims.test.ts`).
 
 ## Still to build
