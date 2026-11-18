@@ -147,6 +147,59 @@ function firstInFacts(hand: HandState, hero: HandState['players'][number]) {
   }
 }
 
+/** A table position as the charts name the seat. Heads-up the button is the small blind. */
+const CHART_POSITION: Record<string, string> = {
+  UTG: 'utg',
+  HJ: 'mp',
+  CO: 'co',
+  BTN: 'btn',
+  SB: 'sb',
+  BB: 'bb',
+  'BTN/SB': 'sb',
+}
+
+/**
+ * Before the flop with exactly one player in ahead of the hero, who has not
+ * acted yet: the spot as a chart names it, or null. `raise` is one raise and
+ * nobody else in (no limper before it, no caller after it, the raiser not all
+ * in). `limp` is the small blind's limp heads-up, the one limped pot the
+ * charts cover. `stackBb` is the smaller of the two stacks. The service looks
+ * the spot up (live-state/solver.mjs).
+ */
+function facingFacts(
+  hand: HandState,
+  hero: HandState['players'][number],
+  seats: Map<string, string>,
+) {
+  if (hand.street !== 'preflop' || hand.variant !== 'holdem' || seats.size > 6) return null
+  const handClass = holeKey(hero.hole)
+  const seat = CHART_POSITION[seats.get(hero.id) ?? '']
+  if (!handClass || !seat) return null
+  const acted = (hand.actions ?? []).filter((action) => action.street === 'preflop')
+  if (acted.some((action) => action.playerId === hero.id)) return null
+  const inAhead = acted.filter((action) => action.type !== 'fold')
+  if (inAhead.length !== 1) return null
+  const [only] = inAhead
+  const them = hand.players.find((player) => player.id === only.playerId)
+  const opener = CHART_POSITION[seats.get(only.playerId) ?? '']
+  if (!them || !opener || them.status !== 'active') return null
+  const bigBlind = Math.max(hand.bigBlind, 1)
+  const total = (player: HandState['players'][number]) => player.stack + player.committedThisHand
+  const tenths = (value: number) => Math.round(value * 10) / 10
+  const spot = {
+    seat,
+    opener,
+    playersDealt: seats.size,
+    stackBb: tenths(Math.min(total(hero), total(them)) / bigBlind),
+    handClass,
+  }
+  if (only.type === 'raise' || only.type === 'bet')
+    return { kind: 'raise' as const, raiseToBb: tenths(only.to / bigBlind), ...spot }
+  if (only.type === 'call' && seats.size === 2 && hand.currentBet === hand.bigBlind)
+    return { kind: 'limp' as const, raiseToBb: null, ...spot }
+  return null
+}
+
 function positions(hand: HandState): Map<string, string> {
   // Include folded/all-in players: positions belong to the original deal.
   const dealt = hand.players.filter((player) => player.hole.length > 0)
@@ -196,6 +249,7 @@ export function describeHand(hand: HandState | null, context: HandContext) {
   // already capped at the hero's stack.
   const toCall = hero && legal && actor === hero.id ? legal.callAmount : null
   const firstIn = hero && actor === hero.id ? firstInFacts(hand, hero) : null
+  const facing = hero && actor === hero.id ? facingFacts(hand, hero, seatPositions) : null
   const potOdds = toCall !== null && toCall > 0 ? toCall / (pot + toCall) : null
   const blindPosts = hand.players.flatMap((player) => {
     const position = seatPositions.get(player.id)
@@ -239,6 +293,8 @@ export function describeHand(hand: HandState | null, context: HandContext) {
           potOdds,
           // Folded round to the hero before the flop: the spot a chart answers.
           firstIn,
+          // One raise in ahead (or the small blind's limp heads-up): the other spot.
+          facing,
         }
       : null,
     communityCards: hand.community.map(cardToString),

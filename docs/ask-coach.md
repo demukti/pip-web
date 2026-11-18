@@ -124,8 +124,8 @@ raise; these two call everything, so with a hand this close, folding is fine").
   worth.
 - **Above fifteen:** the service looks the spot up in Pip's opening chart
   (`live-state/chart.mjs`, read by `live-state/solver.mjs`) and sends the model a `solver`
-  entry beside the hand. No entry heads-up (the small blind is the button there, a
-  different game), and with more than five players behind the entry says to play
+  entry beside the hand. Heads-up the small blind is the button, a different game with
+  its own chart (below), and with more than five players behind the entry says to play
   tighter than the six-handed chart.
 
 **What the chart holds.** For five seats at ten stack steps (20 to 100 big blinds; the
@@ -153,6 +153,24 @@ six-handed solver ranges and Pip's own shove solver, and it is neither of them.
 
 The source ranges sit in `private/sets/` on the machine that builds the chart, which git
 ignores. A clone does not need them: the chart is checked in.
+
+**Facing a raise, and heads-up** (added 2026-11-18, second step). The game also names
+`hero.facing` (`facingFacts` in `hand.ts`): exactly one player in ahead of you before the
+flop and you have not acted. That is one raise with nobody else in (no limper before
+it, no caller after it, the raiser not all in), or the small blind's limp heads-up.
+`VS_OPEN` in the chart file answers the first for all fifteen seat pairings, and
+`HEADS_UP` answers two-handed play: the small blind's first move, and the big blind
+against its raise or its limp. By the same count these are about a fifth of first
+preflop decisions, the largest gap the opening chart left.
+
+These come from published ranges solved at 100 big blinds without rake, which have
+frequencies and no values, so they keep less: the play taken most often, and a second
+one when it is taken at least 30% of the time, which makes the hand close. There is no
+"how much it matters" for them. And they are one depth, so the service is strict about
+where they apply: from 60 big blinds (the smaller of the two stacks) they decide like the
+opening chart; from 25 to 60 the entry carries a `note` that the chart fits loosely and
+the model decides; under 25, and against a raise of more than 3.5 big blinds, there is
+no entry. A re-raise is sized at three times the raise, four from the blinds.
 
 **Who decides, and the instant advice line.** Where the play is clearly the standard one,
 the chart decides: the service sends the advice line itself ("Raise to 25.", `leadFor`)
@@ -400,4 +418,6 @@ who pays (docs/membership.md already lists coaching among what the membership se
 | By hand, 2026-11-16 (ChatGPT-era protocol, same model code) | Answers streaming into the card (first words 0.7–1.1 s, done 1.3–2.7 s from the click), Standard at three sentences, Short shorter, ✕ stopping the model call (`coach_closed` at 933 ms), the card over the result banner at showdown |
 | By hand, 2026-11-16, follow-ups | Local game against a local stand-in for `/coach` (no model calls), Chromium at 375×812 and at desktop width. Reply opened the sheet full screen on the phone size with the hand pinned (J♣ 3♣, pot 3, to call 2) and the box inside the screen at 16px, not focused; a typed follow-up sent with Enter and a quick question from the ? menu both streamed in. The stand-in received the conversation growing by one turn each time, the hand never sent again (unchanged). Esc went back to the card, which showed the latest follow-up with "Conversation" and no ↻; a second Esc closed it and the bulb brought it back without asking. At desktop width the sheet is a 448×640 panel with the box focused, and reopening it lands at the conversation's end |
 | Automated, 2026-11-18, the opening chart | 95 pass with the 16 added. `askCoachSolver` (11): the chart whole and well-formed (letters, limps only from the small blind, no shove above 30 big blinds, close meaning nothing clearly worse); it reads like poker (later seats play more, aces a raise, seven-deuce a fold, small pairs shoved short and raised deep); the play, the size in words and the pattern for a clear raise, a clear fold, a close hand, the small blind's limp-or-raise and a shove; no decimal reaching the coach; the house raise made legal; no entry heads-up, on a short stack, off the hero's turn or for an unreadable spot; the advice line for clear plays only and only as a legal action, from both charts; `solver` and `shown` in the message. `askCoach` (2 more): the real Worker sending the advice line first and the model's reason after it, logging `solver` and `lead`, a follow-up and any other hand going as before; a close spot left to the model. `askCoachHand` (3 more): `hero.firstIn` deep, short (against `shoveEv` itself) and null everywhere else |
-| Unverified | The opening chart against the real model and the deployed Worker: that the explanation agrees with a line it did not write, that it does not repeat it, and how a close hand is argued. The notes as the model applies them (Teach me ran to seven sentences once, one over its six), a refused API key, the rate limit as the player sees it, the bulb on a real phone (touch); follow-ups against the real model, the sheet on a real iPhone with the keyboard and dictation open (the visual-viewport sizing), and the sheet in Firefox and Safari |
+| By hand, 2026-11-18, the opening chart, deployed (`b000d10`) | The hosted game at the Garage against the live Worker and model. On the button with 7-4 offsuit at 49 big blinds, four asks: "Fold." from the service, then a reason that agreed with it, did not repeat it, and used the pattern and the size in words ("a hand the chart plays from no seat", "loses about a tenth of a big blind"). Timed in the browser on three of them: the advice line at 98 and 134 ms, the model's first words at 670 and 692 ms, done at 1.9 to 2.0 s; one ask waited 6.6 s before the service answered at all, then ran normally (unexplained, seen once, minutes after the deploy). A spot the chart does not cover (big blind, limped to): the model's own line at 610 ms, done at 2.0 s, as before |
+| Automated, 2026-11-18, facing a raise and heads-up | 103 pass with the 8 added. `askCoachSolver` (5 more): all fifteen pairings and the three heads-up charts whole; they read like poker (the big blind defends most, and more against a later raise; aces re-raise and seven-deuce folds everywhere; heads-up the small blind plays nearly everything); the play, the pattern, a legal re-raise and the advice line for a fold, a call and a re-raise; a mixed hand left to the model; the depth rule (a note under 60 big blinds, nothing under 25 or against a big raise). `askCoachHand` (3 more): `hero.facing` from real hands, null with a caller in between, a limper, an all-in raiser or the hero already in, and heads-up |
+| Unverified | Facing a raise and heads-up against the real model (not yet deployed when this was written). The opening chart on a close hand, a raise, a shove and the small blind's limp against the real model (only a clear fold has been seen live), and whether the 6.6 s wait recurs. The notes as the model applies them (Teach me ran to seven sentences once, one over its six), a refused API key, the rate limit as the player sees it, the bulb on a real phone (touch); follow-ups against the real model, the sheet on a real iPhone with the keyboard and dictation open (the visual-viewport sizing), and the sheet in Firefox and Safari |

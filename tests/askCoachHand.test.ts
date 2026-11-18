@@ -378,6 +378,89 @@ test('hero.firstIn: null once anybody has come in, off the hero’s turn, and af
   t.is(describeHand(raised, { ...context })!.hero?.firstIn, null)
 })
 
+const threeHanded = (button: number, stacks = [2000, 1500, 1000]) =>
+  startHand({
+    seats: [
+      { id: 'ai1', name: 'One', stack: stacks[1] },
+      { id: 'ai2', name: 'Two', stack: stacks[2] },
+      { id: 'hero', name: 'Hero', stack: stacks[0] },
+    ],
+    buttonIndex: button,
+    smallBlind: 5,
+    bigBlind: 10,
+    rng: mulberry32(42),
+  })
+
+test('hero.facing: one raise in ahead, as a chart names the spot', (t) => {
+  // The button raises, the small blind folds, the hero is the big blind.
+  let hand = threeHanded(0)
+  hand = applyAction(hand, { type: 'raise', amount: 25 })
+  hand = applyAction(hand, { type: 'fold' })
+  const described = describeHand(hand, context)!
+  t.deepEqual(described.hero?.facing, {
+    kind: 'raise',
+    raiseToBb: 2.5,
+    seat: 'bb',
+    opener: 'btn',
+    playersDealt: 3,
+    stackBb: 150, // the raiser's 1,500 against the hero's 2,000
+    handClass: holeKey(hand.players[2].hole),
+  })
+  t.is(described.hero?.firstIn, null)
+})
+
+test('hero.facing: null with a caller in between, a limper, an all-in, or the hero already in', (t) => {
+  // A raise and a call: a different spot (a squeeze), not charted.
+  let called = threeHanded(0)
+  called = applyAction(called, { type: 'raise', amount: 25 })
+  called = applyAction(called, { type: 'call' })
+  t.is(describeHand(called, context)!.hero?.facing, null)
+  // A limp three-handed is not charted either.
+  let limped = threeHanded(0)
+  limped = applyAction(limped, { type: 'call' })
+  limped = applyAction(limped, { type: 'fold' })
+  t.is(describeHand(limped, context)!.hero?.facing, null)
+  // The raiser is all in: a call-or-fold on equity, not the chart's raise.
+  let shoved = threeHanded(0, [2000, 60, 1000])
+  shoved = applyAction(shoved, { type: 'raise', amount: 60 })
+  shoved = applyAction(shoved, { type: 'fold' })
+  t.is(shoved.players[shoved.toActIndex].id, 'hero')
+  t.is(describeHand(shoved, context)!.hero?.facing, null)
+  // The hero opened and was re-raised: no longer a first decision.
+  let reraised = threeHanded(2)
+  t.is(reraised.players[reraised.toActIndex].id, 'hero')
+  t.is(describeHand(reraised, context)!.hero?.facing, null) // first in, nobody ahead
+  reraised = applyAction(reraised, { type: 'raise', amount: 25 })
+  reraised = applyAction(reraised, { type: 'raise', amount: 80 })
+  reraised = applyAction(reraised, { type: 'fold' })
+  t.is(reraised.players[reraised.toActIndex].id, 'hero')
+  t.is(describeHand(reraised, context)!.hero?.facing, null)
+})
+
+test('hero.facing: heads-up, the small blind is the button, and its limp is a spot', (t) => {
+  const headsUp = () =>
+    startHand({
+      seats: [
+        { id: 'ai1', name: 'One', stack: 800 },
+        { id: 'hero', name: 'Hero', stack: 1200 },
+      ],
+      buttonIndex: 0,
+      smallBlind: 5,
+      bigBlind: 10,
+      rng: mulberry32(42),
+    })
+  const raised = applyAction(headsUp(), { type: 'raise', amount: 25 })
+  t.like(describeHand(raised, context)!.hero?.facing, {
+    kind: 'raise',
+    seat: 'bb',
+    opener: 'sb',
+    playersDealt: 2,
+    stackBb: 80,
+  })
+  const limped = applyAction(headsUp(), { type: 'call' })
+  t.like(describeHand(limped, context)!.hero?.facing, { kind: 'limp', raiseToBb: null, seat: 'bb' })
+})
+
 test('brief: preflop on the hero turn', (t) => {
   const hand = deal()
   const [a, b] = hand.players[0].hole.map(cardToString)

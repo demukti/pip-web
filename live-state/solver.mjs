@@ -1,5 +1,5 @@
-// The opening chart's answer for the hero's first move before the flop, put
-// beside the hand the coach is asked about.
+// Pip's preflop charts, put beside the hand the coach is asked about: the
+// first move when it folds round to the hero, and the reply to one raise.
 //
 // The game names the spot (`hand.hero.firstIn`, src/lib/askCoach/hand.ts): the
 // chart seat, the stack in big blinds and the hand class. This looks it up in
@@ -15,11 +15,12 @@
 // hand is close, the model decides, with the reads the table shows, and says
 // the standard play and its reason for leaving it.
 
-import { HANDS, OPEN, STEPS } from './chart.mjs'
+import { HANDS, HEADS_UP, OPEN, STEPS, VS_OPEN } from './chart.mjs'
 
 const SEATS = { utg: 'UTG', mp: 'HJ', co: 'CO', btn: 'BTN', sb: 'SB' }
+const NAMES = { ...SEATS, bb: 'BB' }
 const ORDER = ['utg', 'mp', 'co', 'btn']
-const PLAYS = { R: 'raise', S: 'shove', L: 'limp', F: 'fold' }
+const PLAYS = { R: 'raise', S: 'shove', L: 'limp', F: 'fold', C: 'call', K: 'check' }
 const DOING = { raise: 'Raising', shove: 'Shoving', limp: 'Limping' }
 /** The chart's gap sizes, as the coach says them (the edges are in scripts/coach-chart.ts). */
 export const SIZES = [
@@ -33,9 +34,22 @@ export const SIZES = [
 /** The house raise, in big blinds: smaller on a short stack, bigger out of position. */
 const raiseSize = (seat, step) => (seat === 'sb' ? (step <= 35 ? 2.5 : 3) : step <= 35 ? 2 : 2.5)
 
-/** @typedef {{ hands: string, steps: number[], open: Record<string, any> }} Chart */
+/**
+ * @typedef {{ hands: string, steps: number[], open: Record<string, any>,
+ *   vsOpen: Record<string, any>, headsUp: Record<string, any> }} Chart
+ */
 /** @type {Chart} */
-export const CHART = { hands: HANDS, steps: STEPS, open: OPEN }
+export const CHART = { hands: HANDS, steps: STEPS, open: OPEN, vsOpen: VS_OPEN, headsUp: HEADS_UP }
+
+/**
+ * The charts for one raise in front and for heads-up are solved at 100 big
+ * blinds. Under `SOLVED_DEEP` the coach is told so and decides for itself;
+ * under `SOLVED_FROM` they say nothing. A raise bigger than `RAISE_UP_TO` big
+ * blinds is not the raise they were solved against.
+ */
+const SOLVED_DEEP = 60
+const SOLVED_FROM = 25
+const RAISE_UP_TO = 3.5
 
 const indexes = new WeakMap()
 function indexOf(chart) {
@@ -103,22 +117,115 @@ function pattern(chart, node, step, seat, hand) {
  */
 
 /**
- * What the chart says about the hero's hand in the spot the game named, or
- * null when it has no answer: not a first-in spot, a short stack (the game's
- * own shove chart answers those, `firstIn.shoveChart`), heads-up (there the
- * small blind is the button, a different game), or a hand, seat or number it
- * cannot read.
+ * What the charts say about the hero's hand in the spot the game named, or
+ * null when they have no answer. Three spots are charted: first in
+ * (`hero.firstIn`: the opening chart, or the heads-up one), one raise in front
+ * (`hero.facing`), and the small blind's limp heads-up. Not a short stack's
+ * first move (the game's own shove chart answers those, `firstIn.shoveChart`),
+ * nor a hand, seat or number it cannot read.
  * @param {any} hand
  * @param {Chart} [chart]
  * @returns {SolverEntry | null}
  */
 export function solverFor(hand, chart = CHART) {
-  const spot = hand?.hero?.firstIn
-  if (!spot || typeof spot !== 'object' || spot.shoveChart) return null
-  if (hand.currentPlayerToAct !== hand.hero.playerId) return null
+  if (!hand?.hero || hand.currentPlayerToAct !== hand.hero.playerId) return null
+  const { firstIn, facing } = hand.hero
+  if (firstIn && typeof firstIn === 'object') {
+    if (firstIn.shoveChart) return null
+    return firstIn.playersDealt === 2
+      ? often(hand, chart, chart.headsUp.open, firstIn, 'heads-up')
+      : opening(hand, chart, firstIn)
+  }
+  if (!facing || typeof facing !== 'object') return null
+  if (facing.kind === 'limp')
+    return facing.playersDealt === 2
+      ? often(hand, chart, chart.headsUp.vs_limp, facing, 'heads-up, after the small blind limps')
+      : null
+  if (facing.kind !== 'raise' || !(facing.raiseToBb <= RAISE_UP_TO)) return null
+  const seat = NAMES[facing.seat]
+  const opener = NAMES[facing.opener]
+  if (!seat || !opener) return null
+  return facing.playersDealt === 2
+    ? often(hand, chart, chart.headsUp.vs_raise, facing, 'heads-up, against a raise')
+    : often(
+        hand,
+        chart,
+        Object.hasOwn(chart.vsOpen, `${facing.seat}_vs_${facing.opener}`)
+          ? chart.vsOpen[`${facing.seat}_vs_${facing.opener}`]
+          : null,
+        facing,
+        `against a ${opener} raise`,
+      )
+}
+
+/** The reply to a raise is bigger out of position: three times the raise, four from the blinds. */
+const reRaise = (spot) => (spot.seat === 'sb' || spot.seat === 'bb' ? 4 : 3) * spot.raiseToBb
+
+/** A raise size in big blinds as chips the table will take, or null when no raise is legal. */
+function legalRaise(hand, sizeBb) {
+  const legal = hand.availableActions
+  const bigBlind = Number(hand.bigBlind)
+  if (!(bigBlind > 0) || !legal?.canRaise) return null
+  const to = Math.round(sizeBb * bigBlind)
+  return Math.min(Math.max(to, Number(legal.minRaiseTo) || to), Number(legal.maxRaiseTo) || to)
+}
+
+/**
+ * An answer from a chart that knows how often each play is taken and not what
+ * it is worth: one raise in front, and heads-up. Solved at one depth, so a
+ * shorter stack is told so, and a much shorter one gets no answer.
+ * @returns {SolverEntry | null}
+ */
+function often(hand, chart, node, spot, where) {
+  const at = indexOf(chart).get(spot.handClass)
+  if (!node || at === undefined || !Object.hasOwn(NAMES, spot.seat)) return null
+  if (!(spot.stackBb >= SOLVED_FROM)) return null
+  const best = PLAYS[node.best[at]]
+  const also = PLAYS[node.also[at]]
+  if (!best) return null
+  const seat = NAMES[spot.seat]
+  const facingRaise = spot.kind === 'raise'
+  const say = (play) => (facingRaise && play === 'raise' ? 're-raise' : play)
+  const both = also ? `${say(best)} or ${say(also)}` : say(best)
+
+  // The weakest hand of this shape that does anything but fold (or check).
+  const { name, hands } = family(spot.handClass)
+  const index = indexOf(chart)
+  const passive = spot.kind === 'limp' ? 'K' : 'F'
+  const weakest = hands.findLast((each) => node.best[index.get(each)] !== passive)
+  const doing = spot.kind === 'limp' ? 'raises' : facingRaise ? 'continues with' : 'plays'
+
+  /** @type {SolverEntry} */
+  const entry = {
+    source: `Pip’s chart, ${where}: the standard play against anybody, solved at 100 big blinds.`,
+    seat,
+    chartStackBb: 100,
+    hand: spot.handClass,
+    play: say(best),
+    ...(also ? { asGood: say(also) } : {}),
+    close: Boolean(also),
+    verdict: also
+      ? `Close: ${both}; the solver does both. Reads may decide it.`
+      : `${both[0].toUpperCase()}${both.slice(1)}.`,
+    pattern: weakest
+      ? `The weakest ${name} the ${seat} ${doing} here is ${weakest}.`
+      : `The ${seat} ${doing} no ${name} here.`,
+  }
+  if ([best, also].includes('raise')) {
+    const size = facingRaise ? reRaise(spot) : spot.kind === 'limp' ? 3.5 : 2.5
+    const chips = legalRaise(hand, size)
+    if (chips) entry.raiseToChips = chips
+  }
+  if (spot.stackBb < SOLVED_DEEP)
+    entry.note = `Solved at 100 big blinds, and this is ${Math.round(spot.stackBb)}: calls with small pairs and suited connectors are worth less here, and a re-raise is close to all-in.`
+  return entry
+}
+
+/** @returns {SolverEntry | null} */
+function opening(hand, chart, spot) {
   const at = indexOf(chart).get(spot.handClass)
   if (at === undefined || !Object.hasOwn(SEATS, spot.seat)) return null
-  if (!(spot.stackBb > 0) || spot.playersDealt === 2) return null
+  if (!(spot.stackBb > 0)) return null
   const step = chart.steps.reduce((best, each) =>
     Math.abs(each - spot.stackBb) < Math.abs(best - spot.stackBb) ? each : best,
   )
@@ -149,14 +256,9 @@ export function solverFor(hand, chart = CHART) {
   else entry.verdict = `${Both}. It beats a ${next} by ${SIZES[gap]}.`
 
   // The house raise as chips the table will take.
-  const legal = hand.availableActions
-  const bigBlind = Number(hand.bigBlind)
-  if (bigBlind > 0 && legal?.canRaise && [best, also].includes('raise')) {
-    const to = Math.round(raiseSize(spot.seat, step) * bigBlind)
-    entry.raiseToChips = Math.min(
-      Math.max(to, Number(legal.minRaiseTo) || to),
-      Number(legal.maxRaiseTo) || to,
-    )
+  if ([best, also].includes('raise')) {
+    const chips = legalRaise(hand, raiseSize(spot.seat, step))
+    if (chips) entry.raiseToChips = chips
   }
   if (spot.playersBehind > 5)
     entry.note = `The chart is six-handed and there are ${spot.playersBehind} players behind: play tighter than it says.`
@@ -182,8 +284,9 @@ export function leadFor(hand, chart = CHART) {
   const entry = solverFor(hand, chart)
   if (!entry || entry.close || entry.note) return null
   if (entry.play === 'fold') return legal.canFold === false ? null : 'Fold.'
+  if (entry.play === 'check') return legal.canCheck ? 'Check.' : null
   if (entry.play === 'shove') return shove
-  if (entry.play === 'limp')
+  if (entry.play === 'limp' || entry.play === 'call')
     return legal.canCall && legal.callAmount > 0 ? `Call ${legal.callAmount}.` : null
   return entry.raiseToChips ? `Raise to ${entry.raiseToChips}.` : null
 }

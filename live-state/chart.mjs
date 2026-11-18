@@ -341,3 +341,89 @@ export const OPEN = {
     },
   },
 }
+
+// VS_OPEN: one raise in front of you and nobody else in, as hero_vs_opener,
+// solved at 100 big blinds. One character a hand:
+//   best  the play taken most often: R re-raise, C call, F fold
+//   also  another play taken often enough to name (the hand is mixed), or -
+export const VS_OPEN = {
+  mp_vs_utg: {
+    best: 'RRRRRFFFFRRFFRRRRRFFFFFFFFRFRRFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF',
+    also: '-----R--------------------C--C-----------------------------------------------------------------------------------R-------------------------------------------------------',
+  },
+  co_vs_utg: {
+    best: 'RRRRRRFFFRRFFRRRRRFFFFFFFFRFRRRFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFCFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF',
+    also: '---C--------------------------C------------------------------------------------------------------------------------------------------------------------------------------',
+  },
+  btn_vs_utg: {
+    best: 'RRRCRRRCFRRRFRRCRRCFFFFFFFRRRRRFFFFFFFFCFFRCFFFFFFFFFFFFRRFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFCCFFFFFFFFFFFFCCFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF',
+    also: '---RC-C----------C--------C---C--------F--CR------------CC------------C-------------C-------------C----------------------------R----------------------------------------C',
+  },
+  sb_vs_utg: {
+    best: 'RRRCCCCFFRRRFRRRRRFFFFFFFFRCRRRFFFFFFFFCFFRRFFFFFFFFFFFFCCFFFFFFFFFFFFCFFFFFFFFFFFFFCFFFFFFFFFFFFFCFFFFFFFFFFFFFCRFFFFFFFFFFFFCFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC',
+    also: '---R------------CC--------C--CC--------F--CC-----------------------------------------------------------------------------------C--------------------------C--------------',
+  },
+  bb_vs_utg: {
+    best: 'RRRCCCCCCCRCCRRRCCCCCCCCRRCCRRCCCCCCCCCCCCCCCCCCFFFFCCCCCCCCCFFFFCFFFCCCCCFFFFFFFFFFCCCCFFFFFFFFFFCCCCFFFFFFFFFFCCCCFFFFFFFFFFCCCCFFFFFFFFFFCCCFFFFFFFFFFFCFFFFFFFFFFFFFC',
+    also: '----R----RCRR---RR---------R-C------------RR--------------R-------------------C------R---------------------------R-------------------------------------------------------',
+  },
+  co_vs_mp: {
+    best: 'RRRRRRRFFRRFFRRCRRFFFFFFFFRRRRRFFFFFFFFFFFRRFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFCFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF',
+    also: '--C----------------------------------------------------------------------------------------------------------------------------------------------------------------------',
+  },
+  btn_vs_mp: {
+    best: 'RRRCRRRRRRRRFRRRRRRFFFFFFFRRRRRFFFFFFFFCFFRCFFFFFFFFRFFFRRFFFFFFFFFFFFRRFFFFFFFFFFFFRFFFFFFFFFFFFFRRFFFFFFFFFFFFCRFFFFFFFFFFFFCRFFFFFFFFFFFFCFFFFFFFFFFFFFFFFFFFFFFFFFFFC',
+    also: '---RC-CC--C----C-C--------C---C--------R--CR-------------C------------CC------------C-------------C----------------------------C--------------------------C--------------',
+  },
+  sb_vs_mp: {
+    best: 'RRRCCCCCCRRRFRRRRRCFFFFFFFRCRRRFFFFFFFFCCFRRFFFFFFFFFFFFRRFFFFFFFFFFFFCRFFFFFFFFFFFFCFFFFFFFFFFFFFCFFFFFFFFFFFFFCRFFFFFFFFFFFFCFFFFFFFFFFFFFCFFFFFFFFFFFFFCFFFFFFFFFFFFFC',
+    also: '---R-RR--C-------C---------R-CC------------C------------CC--------------------------R------------------------------------------------------------------------------------',
+  },
+  bb_vs_mp: {
+    best: 'RRRCCCCCCCCCCRRRRCCCCRCCCCRCRRRCCCCCCCCCCCRRCCCCCFFFCCCCCCCCCFFFFCFFCCCCCCCFFFCFFFFFCCCCFFFFFFFFFFCCCCFFFFFFFFFCCCCCFCFFFFFFFCCCCCFFFFFFFFFFCCCFFFFFFFFFFFCFFFFFFFFFFFFFC',
+    also: '-------RRRR-R--C-R---C----CR-CCR--------R--C-------------RR--------------------------R-------------R-------------R-------------R--C--------------------------------------',
+  },
+  btn_vs_co: {
+    best: 'RRRRRRRRRRRRFRRRRRRCCCCFFFRRRRRCFFFFFFFRFFRRRFFFFFFFCFFFRRFFFFFFFFFFFFRRFFFFFFFFFFFFRFFFFFFFFFFFFFRRFFFFFFFFFFFFRRFFFFFFFFFFFFCRFFFFFFFFFFFFCFFFFFFFFFFFFFCFFFFFFFFFFFFFF',
+    also: '----C----------C-C---F--------C---------------------R-----------------------------------------------------------C--------------------------------------------------------',
+  },
+  sb_vs_co: {
+    best: 'RRRRRCCCCRRRFRRRRRRCFFFFFFRRRRRCFFFFFFFRCCRRCFFFFFFFCFFFRRFFFFFFFFFFFFRRFFFFFFFFFFFFRFFFFFFFFFFFFFRFFFFFFFFFFFFFCRFFFFFFFFFFFFCFFFFFFFFFFFFFCFFFFFFFFFFFFFCFFFFFFFFFFFFFC',
+    also: '----CRR-RC-------C------------C--------C-F------------------------------------------C-------------C----------------------------------------------------------------------',
+  },
+  bb_vs_co: {
+    best: 'RRRRCCCCCRCCCRRRRRCCCRCCCCRCRCCCCCCCCCCCRCRRCCCCCCCCCCCCRRCCCCFFFCCCCCCCCCCFFFCFFFCCCRCCFFFCFFFFFCCCCCFFCFFFFFFCCCCCFCFFFFFFFCCCCCCFFFFFFFFFCCCFFFFFFFFFFFCCFFFFFFFFFFFFC',
+    also: '---C-----CR----------C-----R------------CR-CR---------R----------------------------F-C-------------R-------------R-------------R-----------------------------------------',
+  },
+  sb_vs_btn: {
+    best: 'RRRRRCCRRRRRRRRRRRRCCCCCFFRRRCRRCCFFFFFRRCRRRCFFFFFFRCCCRRRFFFFFFFFFFFRRFFFFFFCFFFFFRRFFFFFFFFFFFFRRFFFFFFFFFFFFCRFFFFFFFFFFFFCRFFFFFFFFFFFFCFFFFFFFFFFFFFCFFFFFFFFFFFFFC',
+    also: '------RCC-CC------C----------RCC--------C---------------------------------------------------------C----------------------------------------------------------------------',
+  },
+  bb_vs_btn: {
+    best: 'RRRRCCCCCRCCCRRRRRCCCCCCCCRCRCCCCCCCCCCRCCRRCCCCCCCCCCCCRRRCCCCCCCCCCCRRCCCCFFCCFFCCCRCCCCFCFFFFCCCRCCCFCFFFFFCCCCCCCCFFFFFFFCCRCCCFFFFFFFCCCCCCFFFFFFFFCFCCFFFFFFFFFFFFC',
+    also: '----------R-------R--------R--R--------C---C--R-----R--R---RR-------R--C-------------C---------------------------R-------------C--R--------------------------------------',
+  },
+  bb_vs_sb: {
+    best: 'RRRRRCCCCRRCCRRRRRCCCCCCCCRCRCCCCCCCCCCCCCRCCCCCRCCCCCCCRCCCRCRCCCCCCCCCCCRCCCCCCCCCCCCCCCCCCCCCCCCRCCCCCCCCCCCCCCCCCCCCFFFFCCCRCCCCCFFFFFCCCCCCCFFFFFFFCCCCRCFFFFFFFFRRC',
+    also: '----C-----C-----------------------------------RRCR-------R--C-C-R---RRR-R-C-R--R-R---RR-R--RR--R---C----RR-------R-------------C---------------R------------C------------',
+  },
+}
+
+// HEADS_UP: two players, where the small blind is the button, at 100 big
+// blinds. open: the small blind's first move (R raise, L limp, F fold).
+// vs_raise: the big blind against a raise (R, C, F). vs_limp: the big blind
+// when the small blind limps (R raise, K check).
+export const HEADS_UP = {
+  open: {
+    best: 'RRRRRRRRRRRRRRRRRRRRRRRRLLRRRRRLRRRRRRRRRLRRLRRRRRLLRLLLRRRRLRRRLRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRLRRRRRRRRRRRRLRRLRLRRRRRRRLRRLLLLRRRRRRRRRLFFFFFFL',
+    also: '-----LLLLLLLL--LLLLLLLLL---LL---LLLLLLLLL--L-LLLLL--L----LLLRLLLRLLLLL-LLLLL--LLLLLL-LLLLLLLLL-LLLLLLLLLLLLLLLLLLLLL-LLRLLLLLLLLLLLLRLL-LRLLLLLLLRLL-F--LLLLLLLLL--------',
+  },
+  vs_raise: {
+    best: 'RRRRRRRRRRRRRRRRRRRRRRRCCCRRRRRRRCCCCCCRRRRRRRCCCCCCRRCCRRRRCCCCCRCCCCRRRCCCCCCCCCCCCRRCCCCCCCCCCCCRRCCFCCCFCCCCCRRCCCCFFFFFCCCRRCCCFFFFFFCCCCCCCFFFFFFFCFCCCFFFFFFFFFFFC',
+    also: '------CCCCCCC-----CCCCCRRR-C----CR------CC-CCC------CCRR-CCC-----C-----CC-----R---RR--C-------------C------------CC--R---------CC------------R--------------RC-----------',
+  },
+  vs_limp: {
+    best: 'RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRKRRRRRRRRRRKKKRRRRRRRRRRKKKRRRRRRRRRRKKKRRRRRRRRRRKKKRRKKRRRRRRRKKRKKKKKKRRRRKKRKKKKKKKKRRRRRKKKKKKKKKRRRRKKKKKKKKKKRKRKKKKKKKKKKKR',
+    also: '-----------KK-------K-KKKK-------K-KK-R-K----KKKKRR--K-----KKKR--KKKKK--KKK---KKKKKK-KKKR--KK--KKK-KKK--KR----RK---R-K-------R---KK----------KKKR----------RKR-----------',
+  },
+}

@@ -13,6 +13,8 @@
 //      folding, at six stack depths
 //   b  how often each hand is opened at 100 big blinds, by a second,
 //      independent solver
+//   c  how often each hand re-raises, calls or folds against one raise, and
+//      heads-up, at 100 big blinds without rake (which is Pip's game)
 //
 // **What comes out is Pip's, not either set.** For every seat, hand and one of
 // Pip's own stack steps:
@@ -28,6 +30,12 @@
 //     same choice; a hand with nothing clearly worse is close.
 //   - At the deep steps a hand the two solvers disagree on is close, whatever
 //     either says it is worth.
+//
+// **Facing a raise, and heads-up** (`VS_OPEN`, `HEADS_UP`) come from set c,
+// which has frequencies and no values. So those charts keep less: the play
+// taken most often, and another one if it is taken at least `ALSO` of the
+// time, which makes the hand a mixed one. They are solved at one depth and the
+// coach is told so (live-state/solver.mjs decides where they still apply).
 //
 // It is a baseline: what holds up against anybody. Nothing here is tuned to
 // how Pip's own opponents play; the coach adjusts to them out loud, from the
@@ -243,6 +251,77 @@ for (const step of STEPS) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Set c: one raise in front, and heads-up. One base-36 digit a hand, in steps
+// of 5%, for each play but the last (folding, or checking a limped pot).
+
+/** A second play counts when it is taken at least this often. */
+const ALSO = 0.3
+
+const setC = (() => {
+  const text = readFileSync(new URL('c.js', SETS), 'utf8')
+  const data = JSON.parse((/const DATA = (\{[\s\S]*?\});\s*\n/.exec(text) ?? [])[1] ?? 'null')
+  if (!data?.VS_OPEN || !data?.HU) throw new Error('c.js: not the ranges expected')
+  return data as Record<string, Record<string, Record<string, string>>>
+})()
+
+/** The play taken most often for each hand, and a second one worth naming. */
+function mostOften(node: Record<string, string>, letters: Record<string, string>, rest: string) {
+  let best = ''
+  let also = ''
+  const count = { played: 0, mixed: 0 }
+  HANDS.forEach((hand, at) => {
+    const plays = Object.entries(letters).map(([name, letter]) => {
+      const digits = node[name]
+      if (!digits || digits.length !== HANDS.length) throw new Error(`c.js: no ${name} row`)
+      return { letter, often: (Number.parseInt(digits[at], 36) * 5) / 100 }
+    })
+    plays.push({ letter: rest, often: Math.max(0, 1 - plays.reduce((sum, x) => sum + x.often, 0)) })
+    plays.sort((x, y) => y.often - x.often)
+    best += plays[0].letter
+    also += plays[1].often >= ALSO ? plays[1].letter : '-'
+    if (plays[0].letter !== rest) count.played += combos(hand)
+    if (plays[1].often >= ALSO) count.mixed++
+  })
+  return { best, also, count }
+}
+
+/** Set c's seat names, as the ids Pip gives each. */
+const SEAT_IDS: Record<string, string> = {
+  UTG: 'utg',
+  HJ: 'mp',
+  CO: 'co',
+  BTN: 'btn',
+  SB: 'sb',
+  BB: 'bb',
+}
+const vsOpen: Record<string, { best: string; also: string }> = {}
+for (const [name, node] of Object.entries(setC.VS_OPEN)) {
+  const [hero, opener] = name.split('_vs_')
+  if (!SEAT_IDS[hero] || !SEAT_IDS[opener]) continue // the nine-handed spots
+  const { best, also, count } = mostOften(node, { raise: 'R', call: 'C' }, 'F')
+  vsOpen[`${SEAT_IDS[hero]}_vs_${SEAT_IDS[opener]}`] = { best, also }
+  tally.push(
+    `${name.padEnd(10)} continues ${((100 * count.played) / 1326).toFixed(1).padStart(4)}%  mixed ${count.mixed}`,
+  )
+}
+const headsUp: Record<string, { best: string; also: string }> = {}
+for (const [ours, theirs, letters, rest] of [
+  ['open', 'SB_OPEN', { raise: 'R', limp: 'L' }, 'F'],
+  ['vs_raise', 'BB_vs_SB', { raise: 'R', call: 'C' }, 'F'],
+  ['vs_limp', 'BB_vs_LIMP', { raise: 'R' }, 'K'],
+] as const) {
+  const { best, also, count } = mostOften(setC.HU[theirs], letters, rest)
+  headsUp[ours] = { best, also }
+  tally.push(
+    `HU ${ours.padEnd(8)} plays ${((100 * count.played) / 1326).toFixed(1).padStart(4)}%  mixed ${count.mixed}`,
+  )
+}
+const pairs = (rows: Record<string, { best: string; also: string }>) =>
+  Object.entries(rows)
+    .map(([name, row]) => `  ${name}: {\n    best: '${row.best}',\n    also: '${row.also}',\n  },`)
+    .join('\n')
+
 const blocks = STEPS.map((step) => {
   const seats = SEATS.map(([, ours]) => {
     const node = open[step][ours]
@@ -274,6 +353,22 @@ export const STEPS = [${STEPS.join(', ')}]
 
 export const OPEN = {
 ${blocks.join('\n')}
+}
+
+// VS_OPEN: one raise in front of you and nobody else in, as hero_vs_opener,
+// solved at 100 big blinds. One character a hand:
+//   best  the play taken most often: R re-raise, C call, F fold
+//   also  another play taken often enough to name (the hand is mixed), or -
+export const VS_OPEN = {
+${pairs(vsOpen)}
+}
+
+// HEADS_UP: two players, where the small blind is the button, at 100 big
+// blinds. open: the small blind's first move (R raise, L limp, F fold).
+// vs_raise: the big blind against a raise (R, C, F). vs_limp: the big blind
+// when the small blind limps (R raise, K check).
+export const HEADS_UP = {
+${pairs(headsUp)}
 }
 `
 
