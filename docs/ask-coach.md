@@ -177,11 +177,24 @@ also says who acts last after the flop (`position`): on the first live facing-a-
 hand the model called the cutoff out of position against a hijack raise, so it is now
 told and not left to work it out from seat names.
 
+**Calling an all-in** (added 2026-11-18). When the one raise in front of you is all in,
+`hero.facing` is a `shove`. If the smaller of the two stacks is fifteen big blinds or
+fewer, the game adds `callChart` (`callFacts` in `hand.ts`) from the shove chart it
+already teaches: the equilibrium calling range for your seat against the equilibrium
+shoving range for the shover's. Its verdict is call, fold or close (the range mixes the
+hand, or the call's value is inside the chart's sampling margin), with what calling wins
+over folding if nobody behind comes in too. This is Pip's own data and exact for the
+depth, so there is no loose zone: a deeper all-in simply has no `callChart`, and the
+model decides it on equity and the price as before. The rules tell the model the
+verdict outranks the equity-against-pot-odds comparison here, because that equity is
+against a guessed range and this is against the shover's real one.
+
 **Who decides, and the instant advice line.** Where the play is clearly the standard one,
 the chart decides: the service sends the advice line itself ("Raise to 25.", `leadFor`)
 before the model has been asked, and tells the model it is already `shown`, so the model
 writes only the reason. Where the hand is close, the model decides and writes the line
-as usual. The same goes for the shove chart's shove and fold. On a follow-up the
+as usual. The same goes for the shove chart's shove and fold, and for its call and fold
+against somebody else's all-in. On a follow-up the
 service never writes a line. The entry also carries the **pattern** ("the weakest
 offsuit king the CO plays at this depth is KTo; K9o is first played from the BTN"), so
 an answer teaches a rule and not one hand.
@@ -428,5 +441,6 @@ who pays (docs/membership.md already lists coaching among what the membership se
 | By hand, 2026-11-18, both charts, deployed (`2e7460b`) | The hosted game against the live Worker and model, timed in the browser. Opening chart at The Card Room, 67 big blinds: K-5 suited on the button, aces in the cutoff and A-K suited under the gun each got "Raise to 75." from the service with a reason that agreed; 5-3 offsuit in the small blind got "Fold."; 5-4 suited in the hijack is close, so no line came from the service and the model chose a fold, naming the chart ("only becomes a regular open from the CO") and its reads on the two players behind. Facing a raise at the Downtown Casino, 99.5 big blinds: 4-3 offsuit in the cutoff against a hijack raise to 3.1 big blinds got "Fold." at 267 ms, the model's first words at 907 ms, done at 2.1 s, with the pattern ("the CO continues with no offsuit 4 here"); the reason called the hero out of position, which is wrong (the cutoff acts after the hijack). Advice line across eleven asks: 0.1 to 0.5 s. The service's own log for three of them: 40 to 135 ms to the start of the answer, about 2,480 tokens in. Three of the fourteen asks were slow for a reason outside the service (next row) |
 | Checked, 2026-11-18, a 6.6 s wait that was the test's own | Three of fourteen asks made while an agent was driving the embedded browser (key presses and waits through its automation) waited 6.57 to 6.61 s before the response began, then ran normally. It was not the service: with nothing driving the page, 128 requests from the same browser were all fast, with the service log recording each. 44 with an invalid token and a small body, 68 alternating a small and a 10 KB body (0.03 to 0.3 s in the browser, 10 to 85 ms in the service), and 16 real questions (response begun in 0.07 to 0.43 s, 24 to 141 ms in the service, the model's first words at 0.59 to 0.70 s). A question asked by hand in the same browser took 0.27 s. Why automation stalls a request was not found. The CORS preflight is cached as intended: one for those 16 questions |
 | By hand, 2026-11-18, the two fixes, deployed (`30195af`) | Played at the Downtown Casino before the fixes: K-J offsuit in the big blind against a button raise at 48 big blinds, "Call 149." written by the model (no line from the service at that depth), citing the chart; and 6-5 suited on the button against a hijack raise at 31 big blinds, "Raise to 1215.", the fault the second fix is for. Replayed against the live service after the deploy with hands built to match: the same 6-5 suited spot now "Fold.", calling the deep answer a starting point; 4-3 offsuit in the cutoff against a hijack raise, "Fold." with no position mistake; A-Q offsuit on the button against a cutoff raise, "Raise to 375." from the service, with "you act after her on every street". The Teach me answers ran to nine or ten sentences, over their six |
+| Automated, 2026-11-18, calling an all-in | 107 pass with the 3 added. `askCoachHand` (2 more; one earlier case moved): a six big blind shove from a real hand gives `callChart` equal to the shove chart's own range, value and margin for the big blind; a forty big blind all-in has none; a covered hero reads the chart at its own stack. `askCoachSolver` (1 more): the advice line for call and fold, none for close or a deep all-in, and the raise chart never answering an all-in |
 | By hand, 2026-11-18, heads-up, deployed (`30195af`) | The Challenge, two-handed at 67 big blinds. On the button with 8-3 suited the game sent `firstIn` with two players dealt, the chart mixes a raise and a limp there, so the model chose: "Call 60.", with the pattern and "you act last after the flop". The big blind's two spots, replayed against the live service with hands built to match: Q-7 offsuit against a raise to 300, "Call 180."; 7-2 offsuit after a limp, "Check."; aces after a limp, "Raise to 420."; each line from the service in 0.07 to 0.14 s, each reason with the big blind acting first after the flop |
 | Unverified | The notes as the model applies them (Teach me ran to seven sentences once, one over its six), a refused API key, the rate limit as the player sees it, the bulb on a real phone (touch); follow-ups against the real model, the sheet on a real iPhone with the keyboard and dictation open (the visual-viewport sizing), and the sheet in Firefox and Safari |

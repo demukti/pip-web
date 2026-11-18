@@ -298,7 +298,8 @@ function opening(hand, chart, spot) {
  * The advice line the service can show before the model has said a word, or
  * null when the model must write it: only on the hero's first-in turn, only
  * for a play that is clearly the standard one, and only as a legal action.
- * Covers the chart above and the game's own shove chart for a short stack.
+ * Covers the charts above and the game's own shove chart for a short stack,
+ * both to shove first in and to call somebody else's shove.
  * @param {any} hand
  * @param {Chart} [chart]
  * @returns {string | null}
@@ -310,6 +311,14 @@ export function leadFor(hand, chart = CHART) {
   const shove = legal.canRaise && legal.maxRaiseTo > 0 ? `All in, ${legal.maxRaiseTo}.` : null
   const short = hand.hero.firstIn?.shoveChart
   if (short) return short.verdict === 'shove' ? shove : short.verdict === 'fold' ? 'Fold.' : null
+  // Facing a short stack's all-in: the same chart's calling range.
+  const call = hand.hero.facing?.kind === 'shove' ? hand.hero.facing.callChart : null
+  if (call) {
+    if (call.verdict === 'fold') return legal.canFold === false ? null : 'Fold.'
+    if (call.verdict === 'call')
+      return legal.canCall && legal.callAmount > 0 ? `Call ${legal.callAmount}.` : null
+    return null
+  }
   const entry = solverFor(hand, chart)
   if (!entry || entry.close || entry.note) return null
   if (entry.play === 'fold') return legal.canFold === false ? null : 'Fold.'

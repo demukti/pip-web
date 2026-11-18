@@ -1,7 +1,7 @@
 import test from 'ava'
 import { describeHand, type TableContext } from '@/lib/askCoach/hand'
 import { holeKey } from '@/config/handNames'
-import { classOf, nashFor, shoveEv } from '@/lib/drills/shoveRange'
+import { classOf, equityVs, nashFor, shoveEv } from '@/lib/drills/shoveRange'
 import { mulberry32, cardToString } from '@/lib/poker/cards'
 import { evaluateHand, handPhrase } from '@/lib/poker/handEval'
 import {
@@ -409,7 +409,7 @@ test('hero.facing: one raise in ahead, as a chart names the spot', (t) => {
   t.is(described.hero?.firstIn, null)
 })
 
-test('hero.facing: null with a caller in between, a limper, an all-in, or the hero already in', (t) => {
+test('hero.facing: null with a caller in between, a limper, or the hero already in', (t) => {
   // A raise and a call: a different spot (a squeeze), not charted.
   let called = threeHanded(0)
   called = applyAction(called, { type: 'raise', amount: 25 })
@@ -420,12 +420,6 @@ test('hero.facing: null with a caller in between, a limper, an all-in, or the he
   limped = applyAction(limped, { type: 'call' })
   limped = applyAction(limped, { type: 'fold' })
   t.is(describeHand(limped, context)!.hero?.facing, null)
-  // The raiser is all in: a call-or-fold on equity, not the chart's raise.
-  let shoved = threeHanded(0, [2000, 60, 1000])
-  shoved = applyAction(shoved, { type: 'raise', amount: 60 })
-  shoved = applyAction(shoved, { type: 'fold' })
-  t.is(shoved.players[shoved.toActIndex].id, 'hero')
-  t.is(describeHand(shoved, context)!.hero?.facing, null)
   // The hero opened and was re-raised: no longer a first decision.
   let reraised = threeHanded(2)
   t.is(reraised.players[reraised.toActIndex].id, 'hero')
@@ -435,6 +429,55 @@ test('hero.facing: null with a caller in between, a limper, an all-in, or the he
   reraised = applyAction(reraised, { type: 'fold' })
   t.is(reraised.players[reraised.toActIndex].id, 'hero')
   t.is(describeHand(reraised, context)!.hero?.facing, null)
+})
+
+test('hero.facing: a short stack’s all-in carries the shove chart’s calling answer', (t) => {
+  // The button shoves six big blinds, the small blind folds, the hero is the big blind.
+  let hand = threeHanded(0, [2000, 60, 1000])
+  hand = applyAction(hand, { type: 'raise', amount: 60 })
+  hand = applyAction(hand, { type: 'fold' })
+  t.is(hand.players[hand.toActIndex].id, 'hero')
+  const hole = hand.players[2].hole
+  const facing = describeHand(hand, context)!.hero?.facing
+  t.like(facing, { kind: 'shove', seat: 'bb', opener: 'btn', stackBb: 6, raiseToBb: 6 })
+
+  // The chart's own numbers: the big blind is the second caller behind the button.
+  const nash = nashFor({ seat: 'btn', stack: 6 })
+  const klass = classOf(hole)
+  const calls = nash.call[1][klass]
+  const against = equityVs(klass, nash.shove)
+  const pot = 2 * 6 + (1.5 - 0 - 1)
+  const value = against.equity * pot - (6 - 1)
+  const margin = against.band * pot
+  t.deepEqual(facing && 'callChart' in facing ? facing.callChart : null, {
+    stackBb: 6,
+    verdict:
+      (calls > 0.01 && calls < 0.99) || Math.abs(value) <= margin
+        ? 'close'
+        : calls >= 0.99
+          ? 'call'
+          : 'fold',
+    callValueBb: Math.round(value * 100) / 100,
+    marginBb: Math.round(margin * 100) / 100,
+  })
+})
+
+test('hero.facing: an all-in deeper than the shove chart has no calling answer', (t) => {
+  // Forty big blinds all in: the spot is named, and the call is left to the model.
+  let hand = threeHanded(0, [2000, 400, 1000])
+  hand = applyAction(hand, { type: 'raise', amount: 400 })
+  hand = applyAction(hand, { type: 'fold' })
+  const facing = describeHand(hand, context)!.hero?.facing
+  t.like(facing, { kind: 'shove', stackBb: 40, callChart: null })
+  // The hero is the short one: the chart is read at the hero's stack, not the shover's.
+  let covered = threeHanded(0, [90, 400, 1000])
+  covered = applyAction(covered, { type: 'raise', amount: 400 })
+  covered = applyAction(covered, { type: 'fold' })
+  t.like(describeHand(covered, context)!.hero?.facing, {
+    kind: 'shove',
+    stackBb: 9,
+    callChart: { stackBb: 9 },
+  })
 })
 
 test('hero.facing: heads-up, the small blind is the button, and its limp is a spot', (t) => {

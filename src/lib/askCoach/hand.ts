@@ -2,12 +2,18 @@
 // the engine, built when the player asks. Never serialize HandState directly: it
 // contains the undealt deck and every opponent's private cards.
 import { holeKey } from '@/config/handNames'
+import type { SeatId } from '@/config/positions'
 import {
+  BLINDS,
   MAX_STACK,
   MIN_STACK,
+  SHOVE_SEATS,
   type ShoveSeat,
+  behind,
   classOf,
+  equityVs,
   nashFor,
+  posted,
   shoveEv,
 } from '@/lib/drills/shoveRange'
 import { firstInSpot } from '@/lib/poker/ai/pushFold'
@@ -159,12 +165,62 @@ const CHART_POSITION: Record<string, string> = {
 }
 
 /**
+ * Calling a first-in shove of fifteen big blinds or fewer, from the shove chart
+ * (lib/drills/shoveRange): the equilibrium calling range for the hero's seat
+ * against the equilibrium shoving range for the shover's, at the smaller of
+ * the two stacks. `verdict` is the range's answer, and `close` when it mixes
+ * the hand or the call's value is inside the chart's own sampling margin.
+ * `callValueBb` is what calling wins over folding against that shoving range
+ * with nobody else coming in, in big blinds: a seat with players still behind
+ * it calls tighter than that number alone says, which the verdict already
+ * allows for. Null for a deeper shove, which no chart here answers.
+ */
+function callFacts(
+  hero: HandState['players'][number],
+  seat: string,
+  opener: string,
+  effectiveBb: number,
+) {
+  const shover = SHOVE_SEATS.find((each) => each === opener)
+  if (!shover || effectiveBb > MAX_STACK + 0.5) return null
+  const at = behind(shover).indexOf(seat as SeatId)
+  if (at < 0) return null
+  const stack = Math.min(MAX_STACK, Math.max(MIN_STACK, Math.round(effectiveBb)))
+  const nash = nashFor({ seat: shover as ShoveSeat, stack })
+  const klass = classOf(hero.hole)
+  const calls = nash.call[at]?.[klass]
+  if (calls === undefined) return null
+  // The pot if the hero calls and nobody else does, and what the call adds to it.
+  const pot = 2 * stack + (BLINDS - posted(shover) - posted(seat as SeatId))
+  const risk = stack - posted(seat as SeatId)
+  const against = equityVs(klass, nash.shove)
+  const value = against.weight === 0 ? -risk : against.equity * pot - risk
+  const margin = against.band * pot
+  const mixed = calls > 0.01 && calls < 0.99
+  return {
+    stackBb: stack,
+    verdict:
+      mixed || Math.abs(value) <= margin
+        ? ('close' as const)
+        : calls >= 0.99
+          ? ('call' as const)
+          : ('fold' as const),
+    callValueBb: hundredths(value),
+    marginBb: hundredths(margin),
+  }
+}
+
+/**
  * Before the flop with exactly one player in ahead of the hero, who has not
  * acted yet: the spot as a chart names it, or null. `raise` is one raise and
  * nobody else in (no limper before it, no caller after it, the raiser not all
  * in). `limp` is the small blind's limp heads-up, the one limped pot the
  * charts cover. `stackBb` is the smaller of the two stacks. The service looks
- * the spot up (live-state/solver.mjs).
+ * those spots up (live-state/solver.mjs).
+ *
+ * `shove` is that one raise being all in. Up to fifteen big blinds the shove
+ * chart the game teaches answers it here, as `callChart` (see `callFacts`);
+ * a bigger all-in has none, and the call is the model's on equity and price.
  */
 function facingFacts(
   hand: HandState,
@@ -182,7 +238,7 @@ function facingFacts(
   const [only] = inAhead
   const them = hand.players.find((player) => player.id === only.playerId)
   const opener = CHART_POSITION[seats.get(only.playerId) ?? '']
-  if (!them || !opener || them.status !== 'active') return null
+  if (!them || !opener || (them.status !== 'active' && them.status !== 'allin')) return null
   const bigBlind = Math.max(hand.bigBlind, 1)
   const total = (player: HandState['players'][number]) => player.stack + player.committedThisHand
   const tenths = (value: number) => Math.round(value * 10) / 10
@@ -193,8 +249,17 @@ function facingFacts(
     stackBb: tenths(Math.min(total(hero), total(them)) / bigBlind),
     handClass,
   }
-  if (only.type === 'raise' || only.type === 'bet')
-    return { kind: 'raise' as const, raiseToBb: tenths(only.to / bigBlind), ...spot }
+  const raised = only.type === 'raise' || only.type === 'bet'
+  if (them.status === 'allin')
+    return raised
+      ? {
+          kind: 'shove' as const,
+          raiseToBb: tenths(only.to / bigBlind),
+          ...spot,
+          callChart: callFacts(hero, seat, opener, Math.min(total(hero), total(them)) / bigBlind),
+        }
+      : null
+  if (raised) return { kind: 'raise' as const, raiseToBb: tenths(only.to / bigBlind), ...spot }
   if (only.type === 'call' && seats.size === 2 && hand.currentBet === hand.bigBlind)
     return { kind: 'limp' as const, raiseToBb: null, ...spot }
   return null

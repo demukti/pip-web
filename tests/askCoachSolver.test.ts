@@ -405,3 +405,40 @@ test('the entry says who acts last after the flop, so the model never has to wor
   t.false('position' in (solverFor(spot('co', 100, 'AA')) ?? {}))
   t.regex(COACH_SYSTEM, /solver\.position/)
 })
+
+test('facing a short stack’s all-in: the advice line is the shove chart’s call or fold', (t) => {
+  const shoved = (verdict: string, more: object = {}) => ({
+    ...facing('bb', 'btn', 'A9o', {
+      kind: 'shove',
+      raiseToBb: 9,
+      stackBb: 9,
+      callChart: { stackBb: 9, verdict, callValueBb: 0.6, marginBb: 0.1 },
+    }),
+    availableActions: {
+      canFold: true,
+      canCheck: false,
+      canCall: true,
+      callAmount: 80,
+      canRaise: false,
+      minRaiseTo: 0,
+      maxRaiseTo: 0,
+    },
+    ...more,
+  })
+  t.is(leadFor(shoved('call')), 'Call 80.')
+  t.is(leadFor(shoved('fold')), 'Fold.')
+  // Close is the model's to call, and so is an all-in with no chart answer.
+  t.is(leadFor(shoved('close')), null)
+  const deep = facing('bb', 'btn', 'A9o', {
+    kind: 'shove',
+    raiseToBb: 40,
+    stackBb: 40,
+    callChart: null,
+  })
+  t.is(leadFor(deep), null)
+  // The chart for one raise in front never answers an all-in.
+  t.is(solverFor(shoved('call')), null)
+  t.is(solverFor(deep), null)
+  t.is(leadFor({ ...shoved('call'), currentPlayerToAct: 'ai1' }), null)
+  t.regex(COACH_SYSTEM, /hero\.facing\.callChart/)
+})
