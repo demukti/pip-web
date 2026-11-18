@@ -1,10 +1,21 @@
 'use client'
 
 import { useState, useSyncExternalStore } from 'react'
+import { Lightbulb, MessageSquareText, SlidersHorizontal } from 'lucide-react'
 import { COACH_STYLES, coachPrefs, NOTES_MAX } from '@/lib/askCoach/coach'
 import { askCoachConnection } from '@/lib/askCoach/connection'
-import { Button } from '@/components/ui/button'
+import { SettingsGroup, SettingsRow } from '@/components/settings/group'
 import { Segmented } from '@/components/ui/segmented'
+import { sound } from '@/lib/sound'
+
+// The same field and buttons as the account rows, so the coach's sign-in reads
+// as part of Settings rather than a form dropped into it.
+const field =
+  'w-full rounded-xl bg-foreground/[0.04] px-3 py-3 text-base outline-none ring-primary/40 focus:ring-2'
+const smallButton =
+  'min-h-11 shrink-0 rounded-xl bg-foreground/[0.06] px-4 text-sm font-medium transition hover:bg-foreground/[0.12] active:scale-[0.97] disabled:opacity-40'
+const primaryButton =
+  'min-h-11 w-full rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 active:scale-[0.98] disabled:opacity-40'
 
 /**
  * The coach: sign this browser in once, then shape how it answers. Signed out,
@@ -17,28 +28,37 @@ export function AskCoachSection() {
     askCoachConnection.getServer,
   )
   return (
-    <section className="rounded-2xl border border-foreground/10 bg-foreground/[0.03] p-4">
-      <h2 className="font-semibold">Coach</h2>
-      <p className="mt-2 text-sm text-muted-foreground">
-        Advice on the hand in front of you, only when you ask: press the lightbulb in the corner of
-        your panel at the table (A on a keyboard). Play-money Hold’em against the cast.
-      </p>
+    <SettingsGroup label="Coach">
       {status.signedIn ? <SignedIn url={status.url} /> : <SignIn message={status.message} />}
-      <AskCoachSettings />
-    </section>
+      <StyleRow />
+      <NotesRow />
+    </SettingsGroup>
   )
 }
 
+const ABOUT =
+  'Advice on the hand in front of you, only when you ask: the lightbulb in the corner of your panel at the table (A on a keyboard).'
+
 function SignedIn({ url }: { url: string | null }) {
   return (
-    <div className="mt-3 flex flex-col items-start gap-2">
-      <p role="status" className="text-sm">
-        This browser is signed in{url ? ` to ${new URL(url).host}` : ''}.
-      </p>
-      <Button variant="outline" onClick={() => void askCoachConnection.disconnect()}>
-        Sign out
-      </Button>
-    </div>
+    <SettingsRow
+      icon={Lightbulb}
+      tint="pip"
+      label={url ? `Signed in to ${new URL(url).host}` : 'Signed in'}
+      hint={ABOUT}
+      control={
+        <button
+          type="button"
+          onClick={() => {
+            sound.play('tap')
+            void askCoachConnection.disconnect()
+          }}
+          className={smallButton}
+        >
+          Sign out
+        </button>
+      }
+    />
   )
 }
 
@@ -48,97 +68,112 @@ function SignIn({ message }: { message: string }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   return (
-    <form
-      className="mt-3 flex flex-col gap-3"
-      onSubmit={async (event) => {
-        event.preventDefault()
-        setBusy(true)
-        setError('')
-        try {
-          await askCoachConnection.connect(url, key)
-        } catch (error) {
-          setError(error instanceof Error ? error.message : 'Couldn’t sign in. Try again.')
-        } finally {
-          setKey('')
-          setBusy(false)
-        }
-      }}
-    >
-      {message && (
-        <p role="status" className="text-sm">
-          {message}
-        </p>
-      )}
-      <label className="text-sm">
-        Service URL
+    <SettingsRow icon={Lightbulb} tint="pip" label="Sign in to the coach" hint={ABOUT}>
+      <form
+        className="mt-3 flex flex-col gap-2"
+        onSubmit={async (event) => {
+          event.preventDefault()
+          sound.play('tap')
+          setBusy(true)
+          setError('')
+          try {
+            await askCoachConnection.connect(url, key)
+          } catch (error) {
+            setError(error instanceof Error ? error.message : 'Couldn’t sign in. Try again.')
+          } finally {
+            setKey('')
+            setBusy(false)
+          }
+        }}
+      >
+        {message && (
+          <p role="status" className="text-xs leading-relaxed">
+            {message}
+          </p>
+        )}
         <input
-          className="mt-1 w-full rounded-lg border border-foreground/20 bg-background p-2"
+          className={field}
           type="url"
+          aria-label="Service URL"
           value={url}
           onChange={(event) => setUrl(event.target.value)}
-          placeholder="https://pip-live-state.tizav.workers.dev"
+          placeholder="Service URL"
           required
         />
-      </label>
-      <label className="text-sm">
-        Owner key
         <input
-          className="mt-1 w-full rounded-lg border border-foreground/20 bg-background p-2"
+          className={field}
           type="password"
+          aria-label="Owner key"
           autoComplete="off"
           value={key}
           onChange={(event) => setKey(event.target.value)}
+          placeholder="Owner key"
           minLength={32}
           required
         />
-      </label>
-      <p className="text-xs text-muted-foreground">
-        Asked once: this browser keeps its own sign-in, never the key, and stays signed in until 30
-        days after you last ask.
-      </p>
-      <Button disabled={busy} type="submit">
-        {busy ? 'Signing in…' : 'Sign in'}
-      </Button>
-      {error && (
-        <p role="alert" className="text-sm">
-          {error}
+        <button disabled={busy} type="submit" className={primaryButton}>
+          {busy ? 'Signing in…' : 'Sign in'}
+        </button>
+        <p className="text-xs leading-relaxed text-muted-foreground/70">
+          Asked once: this browser keeps its own sign-in, never the key, and stays signed in until
+          30 days after you last ask.
         </p>
-      )}
-    </form>
+        {error && (
+          <p role="alert" className="text-xs leading-relaxed text-suit-red">
+            {error}
+          </p>
+        )}
+      </form>
+    </SettingsRow>
   )
 }
 
 /**
- * How the coach answers: a length, and the player's own words. Saved in this
- * browser; sent with each question, so a change applies to the next one.
+ * How long the coach answers. Saved in this browser and sent with each
+ * question, so a change applies to the next one.
  */
-function AskCoachSettings() {
+function StyleRow() {
   const prefs = useSyncExternalStore(coachPrefs.subscribe, coachPrefs.get, coachPrefs.getServer)
   const picked = Math.max(
     COACH_STYLES.findIndex((style) => style.value === prefs.style),
     0,
   )
   return (
-    <div className="mt-5 flex flex-col gap-3 border-t border-foreground/10 pt-4">
-      <h3 className="text-sm font-semibold">How the coach answers</h3>
-      <div className="flex flex-col gap-1.5">
+    <SettingsRow
+      icon={SlidersHorizontal}
+      tint="pip"
+      label="Answers"
+      hint={COACH_STYLES[picked].about}
+    >
+      <div className="mt-3">
         <Segmented
           options={COACH_STYLES.map((style, index) => ({ value: index, label: style.label }))}
           value={picked}
           onPick={(index) => coachPrefs.set({ style: COACH_STYLES[index].value })}
         />
-        <p className="px-1 text-xs text-muted-foreground">{COACH_STYLES[picked].about}</p>
       </div>
-      <label className="text-sm">
-        How do you want to be coached?
-        <textarea
-          className="mt-1 block min-h-20 w-full rounded-lg border border-foreground/20 bg-background p-2 text-sm"
-          value={prefs.notes}
-          maxLength={NOTES_MAX}
-          onChange={(event) => coachPrefs.set({ notes: event.target.value })}
-          placeholder="I’m working on 3-bets. Be blunt."
-        />
-      </label>
-    </div>
+    </SettingsRow>
+  )
+}
+
+/** The player's own words, sent with every question. */
+function NotesRow() {
+  const prefs = useSyncExternalStore(coachPrefs.subscribe, coachPrefs.get, coachPrefs.getServer)
+  return (
+    <SettingsRow
+      icon={MessageSquareText}
+      tint="pip"
+      label="Your notes"
+      hint="How you want to be coached. Sent with every question."
+    >
+      <textarea
+        aria-label="How do you want to be coached?"
+        className={`${field} mt-3 block min-h-24 resize-y`}
+        value={prefs.notes}
+        maxLength={NOTES_MAX}
+        onChange={(event) => coachPrefs.set({ notes: event.target.value })}
+        placeholder="I’m working on 3-bets. Be blunt."
+      />
+    </SettingsRow>
   )
 }
