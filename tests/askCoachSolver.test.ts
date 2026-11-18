@@ -412,7 +412,7 @@ test('facing a short stack’s all-in: the advice line is the shove chart’s ca
       kind: 'shove',
       raiseToBb: 9,
       stackBb: 9,
-      callChart: { stackBb: 9, verdict, callValueBb: 0.6, marginBb: 0.1 },
+      callChart: { stackBb: 9, verdict, callValueBb: 0.6 },
     }),
     availableActions: {
       canFold: true,

@@ -184,7 +184,8 @@ already teaches: the equilibrium calling range for your seat against the equilib
 shoving range for the shover's. Its verdict is call, fold or close (the range mixes the
 hand, or the call's value is inside the chart's sampling margin), with what calling wins
 over folding if nobody behind comes in too. This is Pip's own data and exact for the
-depth, so there is no loose zone: a deeper all-in simply has no `callChart`, and the
+depth, so there is no loose zone (the sampling margin is used for the verdict and not
+sent: on the first live call the model quoted it as the size of the edge): a deeper all-in simply has no `callChart`, and the
 model decides it on equity and the price as before. The rules tell the model the
 verdict outranks the equity-against-pot-odds comparison here, because that equity is
 against a guessed range and this is against the shover's real one.

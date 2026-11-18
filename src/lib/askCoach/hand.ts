@@ -131,7 +131,6 @@ function firstInFacts(hand: HandState, hero: HandState['players'][number]) {
     stackBb: number
     verdict: 'shove' | 'fold' | 'close'
     shoveValueBb: number
-    marginBb: number
   } | null = null
   if (spot.effectiveBb <= MAX_STACK) {
     const stack = Math.max(MIN_STACK, Math.round(spot.effectiveBb))
@@ -140,7 +139,6 @@ function firstInFacts(hand: HandState, hero: HandState['players'][number]) {
       stackBb: stack,
       verdict: Math.abs(value.ev) <= value.band ? 'close' : value.ev > 0 ? 'shove' : 'fold',
       shoveValueBb: hundredths(value.ev),
-      marginBb: hundredths(value.band),
     }
   }
   return {
@@ -170,6 +168,7 @@ const CHART_POSITION: Record<string, string> = {
  * against the equilibrium shoving range for the shover's, at the smaller of
  * the two stacks. `verdict` is the range's answer, and `close` when it mixes
  * the hand or the call's value is inside the chart's own sampling margin.
+ * The margin itself is not sent: the model read it as the size of the edge.
  * `callValueBb` is what calling wins over folding against that shoving range
  * with nobody else coming in, in big blinds: a seat with players still behind
  * it calls tighter than that number alone says, which the verdict already
@@ -206,7 +205,6 @@ function callFacts(
           ? ('call' as const)
           : ('fold' as const),
     callValueBb: hundredths(value),
-    marginBb: hundredths(margin),
   }
 }
 

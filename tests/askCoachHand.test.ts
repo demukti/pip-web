@@ -343,7 +343,6 @@ test('hero.firstIn: a short stack carries the shove chart’s own answer', (t) =
     stackBb: 15,
     verdict: Math.abs(value.ev) <= value.band ? 'close' : value.ev > 0 ? 'shove' : 'fold',
     shoveValueBb: Math.round(value.ev * 100) / 100,
-    marginBb: Math.round(value.band * 100) / 100,
   })
   // A stack under the chart's three big blinds is read at three.
   const tiny = describeHand(dealDeep([25, 1500, 1000]), context)!.hero?.firstIn
@@ -458,7 +457,6 @@ test('hero.facing: a short stack’s all-in carries the shove chart’s calling 
           ? 'call'
           : 'fold',
     callValueBb: Math.round(value * 100) / 100,
-    marginBb: Math.round(margin * 100) / 100,
   })
 })
 
