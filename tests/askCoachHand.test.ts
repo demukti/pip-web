@@ -3,7 +3,8 @@ import { describeHand, type TableContext } from '@/lib/askCoach/hand'
 import { holeKey } from '@/config/handNames'
 import { classOf, equityVs, nashFor, shoveEv } from '@/lib/drills/shoveRange'
 import { mulberry32, cardToString } from '@/lib/poker/cards'
-import { evaluateHand, handPhrase } from '@/lib/poker/handEval'
+import { evaluateHand } from '@/lib/poker/handEval'
+import { madeHandLabel, madeHandWords } from '@/lib/askCoach/made'
 import {
   startHand,
   applyAction,
@@ -523,7 +524,7 @@ test('brief: facing a bet on the flop', (t) => {
   const board = hand.community.map(cardToString).join(' ')
   t.is(
     describeHand(hand, { ...context, handNo: 12, displayedEquity: 0.5 })!.brief,
-    `Hand 12, flop. You are BTN with ${a} ${b}, 190 behind. Board ${board}. You have a pair. Pot 70. Your turn: 20 to call, pot odds 22%. Equity 50%.`,
+    `Hand 12, flop. You are BTN with ${a} ${b}, 190 behind. Board ${board}. You have a pair of nines. Pot 70. Your turn: 20 to call, pot odds 22%. Equity 50%.`,
   )
 })
 
@@ -601,7 +602,11 @@ test('hero.handName names the made hand from the flop on, as the felt does', (t)
     const expected =
       hand.community.length >= 3 ? evaluateHand(hero.hole, hand.community, hand.variant) : null
     t.is(described.hero!.handName, expected?.name ?? null)
-    if (expected) t.true(described.brief.includes(`You have ${handPhrase(expected)}.`))
+    t.is(
+      described.hero!.madeHand,
+      expected ? madeHandWords(hero.hole, hand.community, expected) : null,
+    )
+    if (expected) t.true(described.brief.includes(`You have ${madeHandLabel(expected)}.`))
     streets.add(hand.street)
   })
   t.deepEqual([...streets], ['preflop', 'flop', 'turn', 'river'])

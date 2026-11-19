@@ -229,6 +229,12 @@ mistakes were: Haiku miscounted a straight draw's outs in testing, and on a live
 Sonnet said a straight would beat a full house. They are the counterpart to the
 opening chart: the game works the poker out and the model explains it.
 
+- **`hero.madeHand`:** the made hand said exactly, and which of the hero's own cards
+  are in it (`src/lib/askCoach/made.ts`, Hold'em only, from the flop on). Added 2026-11-19 after the model, given only `handName`
+  ("Pair"), twice told a player with A5 on 4 T 8 8 they had "a pair of aces": the pair
+  is the board's eights and the ace only a kicker. Now it reads "A pair of eights. The
+  eights are on the board, not from your cards. Your ace (As) and five (5c) play only
+  as kickers." The brief says the hand the same way ("You have a pair of eights.").
 - **`hero.beatenBy`:** every holding that beats the hero's hand on this board right now,
   grouped by the hand it makes, strongest first, with the count out of every holding the
   hero can't rule out. A group lists its hole-card classes ("KK", "KJ", "AKs" when only

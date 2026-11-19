@@ -3,6 +3,7 @@
 // contains the undealt deck and every opponent's private cards.
 import { holeKey } from '@/config/handNames'
 import { beatenBy, outs } from '@/lib/askCoach/board'
+import { madeHandLabel, madeHandWords } from '@/lib/askCoach/made'
 import type { SeatId } from '@/config/positions'
 import {
   BLINDS,
@@ -362,6 +363,12 @@ export function describeHand(hand: HandState | null, context: HandContext) {
           position: seatPositions.get(hero.id) ?? null,
           holeCards: hero.hole.map(cardToString),
           handName: made?.name ?? null,
+          // Which hand exactly, and which of the hero's cards are in it: the name
+          // alone ("Pair") let the model guess the pair from the hero's own cards.
+          madeHand:
+            made && hand.variant === 'holdem'
+              ? madeHandWords(hero.hole, hand.community, made)
+              : null,
           equity,
           equityDisplay: formatWinPct(equity),
           lastEquity,
@@ -559,7 +566,7 @@ function brief(
     return parts.join(' ')
   }
   if (facts.made && hero && hero.status !== 'folded') {
-    const phrase = handPhrase(facts.made)
+    const phrase = hand.variant === 'holdem' ? madeHandLabel(facts.made) : handPhrase(facts.made)
     parts.push(phrase ? `You have ${phrase}.` : `Your hand: ${facts.made.name}.`)
   }
   parts.push(`Pot ${facts.pot}.`)
