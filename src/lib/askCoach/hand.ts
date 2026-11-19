@@ -2,6 +2,7 @@
 // the engine, built when the player asks. Never serialize HandState directly: it
 // contains the undealt deck and every opponent's private cards.
 import { holeKey } from '@/config/handNames'
+import { beatenBy, outs } from '@/lib/askCoach/board'
 import type { SeatId } from '@/config/positions'
 import {
   BLINDS,
@@ -86,6 +87,18 @@ export function heroTurnEquity(
 }
 
 const pct = (fraction: number) => `${Math.round(fraction * 100)}%`
+
+/**
+ * How the hero's hand stands on the board (`board.ts`), from the flop on while the
+ * hero is still in an unfinished Hold'em hand with both cards face up; otherwise
+ * null. A finished hand has its result instead.
+ */
+function boardFacts(hand: HandState, hero: HandState['players'][number] | undefined) {
+  if (!hero || hand.variant !== 'holdem' || isHandComplete(hand)) return null
+  if (hero.status === 'folded' || hero.status === 'out') return null
+  if (hero.hole.length !== 2 || hand.community.length < 3) return null
+  return { beatenBy: beatenBy(hero.hole, hand.community), outs: outs(hero.hole, hand.community) }
+}
 
 /**
  * The hero's made hand, by the felt's own rule (`useHandLabel` in
@@ -306,8 +319,9 @@ export function describeHand(hand: HandState | null, context: HandContext) {
         : null
   const pot = potSize(hand)
   const made = heroMadeHand(hand, hero)
+  const board = boardFacts(hand, hero)
   const table = context.table ?? null
-  const shownHands = revealedHands(hand, context.heroId, seatPositions)
+  const shownHands = revealedHands(hand, seatPositions)
   // Price to call only on the hero's own turn: the engine's call amount,
   // already capped at the hero's stack.
   const toCall = hero && legal && actor === hero.id ? legal.callAmount : null
@@ -358,6 +372,9 @@ export function describeHand(hand: HandState | null, context: HandContext) {
           firstIn,
           // One raise in ahead (or the small blind's limp heads-up): the other spot.
           facing,
+          // After the flop: what beats the hand now, and the cards that improve it.
+          beatenBy: board?.beatenBy ?? null,
+          outs: board?.outs ?? null,
         }
       : null,
     communityCards: hand.community.map(cardToString),
@@ -405,9 +422,9 @@ export function describeHand(hand: HandState | null, context: HandContext) {
       name: hand.players.find((player) => player.id === action.playerId)?.name ?? null,
       position: seatPositions.get(action.playerId) ?? null,
     })),
-    // Public results only: never the evaluations wholesale (the table names
-    // only the hero's and the winning hand), never the review format's
-    // all-player hole array. `shownHands` is what the felt turned face up.
+    // Public results only: never the evaluations wholesale (a folded hand's
+    // stays secret), never the review format's all-player hole array.
+    // `shownHands` is what the felt turned face up, each with its name.
     result: hand.result
       ? {
           showdown: hand.result.showdown,
@@ -463,21 +480,18 @@ type ShownHand = {
  * order: the engine's `showsHoleCards`, the rule the felt itself draws by.
  * Empty without a showdown and while the hand is in play.
  *
- * `handName` only where the table already says it: under the hero's own cards,
- * and in the result line for the first pot's winners (`describeResult`).
+ * Every shown hand carries its `handName`, the losers' too: the cards and the
+ * board are face up, so the name adds nothing the player cannot see. Without it
+ * the model ranked a losing straight itself, mid-answer, and corrected itself
+ * in the text ("Wait, correction", 2026-11-18).
  */
-function revealedHands(
-  hand: HandState,
-  heroId: string,
-  positions: Map<string, string>,
-): ShownHand[] {
+function revealedHands(hand: HandState, positions: Map<string, string>): ShownHand[] {
   const result = hand.result
   if (!result) return []
-  const named = new Set([heroId, ...(result.potsAwarded[0]?.winners ?? [])])
   return hand.players
     .filter((player) => showsHoleCards(hand, player))
     .map((player) => {
-      const handName = named.has(player.id) ? result.evaluations?.[player.id]?.name : undefined
+      const handName = result.evaluations?.[player.id]?.name
       return {
         playerId: player.id,
         name: player.name,

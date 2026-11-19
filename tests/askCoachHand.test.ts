@@ -109,7 +109,6 @@ test('showdown: the hands the table turned over, in seat order, and only those',
       name: 'Hero',
       position: 'BTN',
       holeCards: cardsOf(hand.players[0]),
-      // The table names the hero's own hand under their cards…
       handName: evaluations.hero.name,
     },
     {
@@ -117,11 +116,16 @@ test('showdown: the hands the table turned over, in seat order, and only those',
       name: 'One',
       position: 'SB',
       holeCards: cardsOf(hand.players[1]),
-      // …and the winner's in the result line…
       handName: evaluations.ai1.name,
     },
-    // …but never a losing opponent's.
-    { playerId: 'ai2', name: 'Two', position: 'BB', holeCards: cardsOf(hand.players[2]) },
+    // A losing hand is named too, so the model never ranks it itself.
+    {
+      playerId: 'ai2',
+      name: 'Two',
+      position: 'BB',
+      holeCards: cardsOf(hand.players[2]),
+      handName: evaluations.ai2.name,
+    },
   ])
   t.deepEqual(result.potsAwarded, [{ amount: 30, winners: ['ai1'] }])
 })

@@ -87,7 +87,7 @@ question before caching. A follow-up sends the whole conversation again, about 2
 tokens more each time.
 
 **Caching.** The fixed rules (`COACH_SYSTEM`, 1,197 tokens by the API's count,
-2026-11-18) carry the only cache mark, so every question shares one entry, whatever its
+2026-11-18, about 100 more since the board facts) carry the only cache mark, so every question shares one entry, whatever its
 length setting or notes. The entry lasts 5 minutes from its last use. A question within
 5 minutes of the last one reads the rules for about 0.01 cents instead of 0.24, so it
 costs about a third less. The first question after a pause writes them for about 0.06
@@ -102,11 +102,15 @@ and `cacheWriteTokens`.
 **What the model sees.** Fixed rules (`COACH_SYSTEM`): the answer's shape; no advice
 when it is not the hero's turn or the run is over; the description's own equity, pot
 odds and hand name rather than its own arithmetic; the opening chart's play or the shove
-chart's for a first move before the flop ([The opening chart](#the-opening-chart)); legal
+chart's for a first move before the flop ([The opening chart](#the-opening-chart)); after
+the flop, the board facts for what beats the hero and the outs ([After the
+flop](#after-the-flop-the-board-facts)); legal
 actions only; reads only when present; never a guessed card; chips without a currency
 sign. Then the player's
 length, then the player's notes, told to yield to the rules. The user message is
-`{ hand }`, exactly as the game sent it, with `solver` beside it when the chart answers
+`{ hand }`, exactly as the game sent it (at showdown every face-up hand is named, the
+losers' too: unnamed, the model ranked a losing straight itself and corrected itself
+mid-answer, "Wait, correction", 2026-11-18), with `solver` beside it when the chart answers
 the spot and `shown` when the service has already written the advice line. The rules end with how to answer a
 follow-up: the question itself, in plain words, no advice line unless asked what to
 do, within the length's sentences.
@@ -215,6 +219,38 @@ under a tenth of a millisecond, and no storage is read. In a clear spot the firs
 no longer wait for the model at all. The question grows by about 400 tokens (the rules
 by about 290, the entry by about 95; measured in characters, 2026-11-18). `ask_coach_answer` logs `solver` (the hand went
 with an entry) and `lead` (the service wrote the advice line).
+
+## After the flop: the board facts
+
+From the flop on, while the hero is still in the hand, the game adds two facts beside
+the hand name and equity (`src/lib/askCoach/board.ts`, added 2026-11-19). Before them,
+everything the model said about the board was its own reasoning, and that is where its
+mistakes were: Haiku miscounted a straight draw's outs in testing, and on a live hand
+Sonnet said a straight would beat a full house. They are the counterpart to the
+opening chart: the game works the poker out and the model explains it.
+
+- **`hero.beatenBy`:** every holding that beats the hero's hand on this board right now,
+  grouped by the hand it makes, strongest first, with the count out of every holding the
+  hero can't rule out. A group lists its hole-card classes ("KK", "KJ", "AKs" when only
+  the suited ones do it) when there are at most eight, and only its count past that
+  (any two hearts for a flush). A chop is not a beat. Tens full on J J T K is beaten by
+  12 of 1,035: J-J, K-K, K-J and J-T, and no straight.
+- **`hero.outs`:** on the flop and turn, the next cards that move the hero up a made
+  hand, grouped by that hand, with the hero's own cards playing: a card that pairs the
+  board for everyone is not an out. A group gives its `suit` when it is one suit (a
+  flush draw is "any heart") and its `ranks` otherwise. Null on the river.
+
+They count what exists, not what an opponent holds: the rules say how likely an opponent
+is to hold one is for the equity and the reads, so a short list of strong hands doesn't
+make the model timid. Neither names a card: they are counts, classes, ranks and suits, so
+nothing in them looks like the deck (`tests/askCoachBoard.test.ts` holds that). They
+are absent before the flop, once the hand is over, after the hero folds, and while a
+Mystery Card is face down.
+
+**What it costs.** About a quarter of a millisecond in the browser, only when the player
+asks: 1,035 holdings and 46 cards through `rank7`'s fast evaluator. Left out on purpose:
+the hands behind now that could pass the hero later. The equity already weighs them, and
+listing them is where the question would start to grow.
 
 ## The player's settings
 
